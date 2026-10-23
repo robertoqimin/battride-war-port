@@ -106,6 +106,7 @@ void     cellGcmTickFlip(void);
 int      cellGcm_take_flip_pending(void);
 void     cellGcm_rsx_process_fifo(void);      /* drain get -> put */
 unsigned cellGcm_flip_request_count(void);
+void     cellGcm_fifo_kick_wait(unsigned ms); /* idle wait, woken when a guest waits on a fence */
 }
 
 /* ---------------------------------------------------------------------------
@@ -133,10 +134,14 @@ extern "C" int  rsx_metal_backend_pump_messages(void);
 #  define RSX_BACKEND_NAME    "Metal"
 #elif defined(PS3RECOMP_RSX_VULKAN)
 extern "C" int rsx_vulkan_backend_init(uint32_t, uint32_t, const char*);
-extern "C" void rsx_vulkan_backend_present(void);
+extern "C" void rsx_vulkan_backend_present_begin(void);
+extern "C" void rsx_vulkan_backend_present_poll(void);
 extern "C" int rsx_vulkan_backend_pump_messages(void);
 #  define rsx_backend_init rsx_vulkan_backend_init
-#  define rsx_backend_present rsx_vulkan_backend_present
+/* Only the first half: the GPU renders the frame while this thread walks the
+ * next one. The poll (or the next begin) shows it once it is done. */
+#  define rsx_backend_present rsx_vulkan_backend_present_begin
+#  define rsx_backend_poll rsx_vulkan_backend_present_poll
 #  define rsx_backend_pump rsx_vulkan_backend_pump_messages
 #  define RSX_BACKEND_NAME "Vulkan"
 #else
@@ -147,6 +152,9 @@ extern "C" int  rsx_null_backend_pump_messages(void);
 #  define rsx_backend_present rsx_null_backend_present
 #  define rsx_backend_pump    rsx_null_backend_pump_messages
 #  define RSX_BACKEND_NAME    "null (headless software)"
+#endif
+#ifndef rsx_backend_poll
+#  define rsx_backend_poll() ((void)0)
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -204,8 +212,10 @@ static DWORD WINAPI frame_clock(LPVOID)
     ULONGLONG next_tick = GetTickCount64();
 
     for (;;) {
-        Sleep(4);
+        /* Woken early when a guest thread waits on a fence the drain writes. */
+        cellGcm_fifo_kick_wait(4);
         port_sail_poll();
+        rsx_backend_poll();
         ULONGLONG now = GetTickCount64();
 
         int fired = 0;
@@ -235,11 +245,17 @@ static DWORD WINAPI frame_clock(LPVOID)
          * those at 16 ms apiece paces the guest into single-figure frame rates.
          * The real RSX writes them in microseconds. */
         if (rsx_ok) {
-            if (cellGcm_take_flip_pending()) {
-                present_guest_frame();
-                last_flip = cellGcm_flip_request_count();
+            /* A drain stops at each flip. Present it and keep draining in this
+             * pass instead of after the next wait, a few frames at most. */
+            for (int pass = 0; pass < 4; pass++) {
+                if (cellGcm_take_flip_pending()) {
+                    present_guest_frame();
+                    last_flip = cellGcm_flip_request_count();
+                } else if (pass) {
+                    break;
+                }
+                cellGcm_rsx_process_fifo();
             }
-            cellGcm_rsx_process_fifo();
 
             if (rsx_backend_pump() != 0) {
                 rsx_ok = 0;              /* window closed */

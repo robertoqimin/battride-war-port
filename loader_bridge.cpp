@@ -1795,6 +1795,13 @@ static void ww_arm_inline_window(uint32_t ww)
 }
 static inline void barrier_watch_hit(uint32_t a, uint32_t v, int width, void* ra)
 {
+    /* Every guest store comes through here. With no store watch armed (the
+     * normal case) skip the dozen static checks below on one predictable
+     * branch: they were a visible share of the render thread's samples in
+     * the opening mission. */
+    { static int armed = -1;
+      if (__builtin_expect(armed == 0, 1) && !g_barrier_sync_watch) return;
+      if (armed < 0) armed = (getenv("PPU_WVAL") || getenv("PPU_WWATCH")) ? 1 : 0; }
     /* PPU_WVAL=<hexvalue>: log every PPU store that WRITES this value, wherever
      * it lands. PPU_WWATCH answers "who writes this address"; when a bad value is
      * copied from node to node down a list, that only ever catches the copy.
