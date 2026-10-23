@@ -112,7 +112,8 @@
  * headless run never depends on a driver that can present. */
 #define VK_WSI_INSTANCE_FNS(X) \
     X(vkDestroySurfaceKHR) X(vkGetPhysicalDeviceSurfaceSupportKHR) \
-    X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) X(vkGetPhysicalDeviceSurfaceFormatsKHR)
+    X(vkGetPhysicalDeviceSurfaceCapabilitiesKHR) X(vkGetPhysicalDeviceSurfaceFormatsKHR) \
+    X(vkGetPhysicalDeviceSurfacePresentModesKHR)
 #define VK_WSI_DEVICE_FNS(X) \
     X(vkCreateSwapchainKHR) X(vkDestroySwapchainKHR) X(vkGetSwapchainImagesKHR) \
     X(vkAcquireNextImageKHR) X(vkQueuePresentKHR)
@@ -1915,6 +1916,23 @@ static int vk_create_swapchain(void)
     u32 count = caps.minImageCount + 1;
     if (caps.maxImageCount && count > caps.maxImageCount) count = caps.maxImageCount;
 
+    /* MAILBOX when the driver has it: the window shows the newest frame at
+     * the next vblank and a present never waits for one. FIFO blocks the
+     * present -- which runs on the FIFO walker's thread -- until a vblank, so
+     * a frame a little over 33 ms waited to 50 ms and missions ran at 20-24
+     * fps instead of 30. PS3RECOMP_VK_VSYNC=1 keeps FIFO. */
+    VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;   /* the one mode every driver has */
+    if (!vk_env_on("PS3RECOMP_VK_VSYNC")) {
+        u32 nm = 0;
+        VkPresentModeKHR modes[16];
+        if (pvkGetPhysicalDeviceSurfacePresentModesKHR(s_vk.phys, s_vk.surface, &nm, NULL) == VK_SUCCESS) {
+            if (nm > 16) nm = 16;
+            if (pvkGetPhysicalDeviceSurfacePresentModesKHR(s_vk.phys, s_vk.surface, &nm, modes) >= VK_SUCCESS)
+                for (u32 i = 0; i < nm; i++)
+                    if (modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) mode = VK_PRESENT_MODE_MAILBOX_KHR;
+        }
+    }
+
     static const VkCompositeAlphaFlagBitsKHR alphas[] = {
         VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
         VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
@@ -1932,7 +1950,7 @@ static int vk_create_swapchain(void)
         .imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .preTransform = caps.currentTransform, .compositeAlpha = alpha,
-        .presentMode = VK_PRESENT_MODE_FIFO_KHR,   /* the one mode every driver has */
+        .presentMode = mode,
         .clipped = VK_TRUE, .oldSwapchain = old,
     };
     VkSwapchainKHR sc = VK_NULL_HANDLE;
@@ -1958,7 +1976,8 @@ static int vk_create_swapchain(void)
 
     s_vk.sc_extent = ext;
     s_vk.sc_count = n;
-    VK_LOG("window swapchain %ux%u, %u images, format %d\n", ext.width, ext.height, n, (int)fmt.format);
+    VK_LOG("window swapchain %ux%u, %u images, format %d, %s\n", ext.width, ext.height, n, (int)fmt.format,
+           mode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : "fifo (vsync)");
     return 0;
 }
 
