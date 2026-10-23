@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""Statically translate the audio SPU task (and its MP3 codec) for spu_bridge.c.
+
+Interpreted, the audio task filled about a third of the cellAudio blocks in
+time; the sound broke up into short bursts. Two pieces of code do the work:
+
+- the task itself. The static translator rejects the whole image because its
+  .text ends in a data tail (473 words from LS 0x171D0 that do not decode);
+  everything below that address is code, and is translated on its own.
+- flashMP3.pic from the firmware (README_FIRMWARE.md), which the task loads
+  at LS 0x1A880 byte for byte, with no relocation, and runs for most sound
+  effects. It is translated from the builder's own copy, only when that copy
+  is the one this was checked against, and the translation stays local.
+
+spu_bridge.c runs a translated function when the interpreter reaches one. A
+function stays interpreted when it could reach an indirect branch inside a
+call: the runtime's general dispatcher would resolve that, and it ends the
+task on code it has no translation for. A codec function also runs only
+while local store still holds the codec's own instructions there.
+
+Writes <spu>/battride_audio/{task,mp3}/spu_recomp.[ch] and audio_task.h.
+"""
+import argparse
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+TASK_SHA256 = 'e33837bb55e56b6d6ae06bac574b8fa614976a6c4cf40b0b98348c868d490c53'
+TASK_SIZE = 95636
+TASK_CODE_END = 0x171D0
+MP3_SHA256 = 'adbd993483a41f53c994e080665fb5fbf36af783956d0e4ded30057b8b4e894a'
+MP3_BASE = 0x1A880             # where the task loads it (vaddr 0)
+MP3_TEXT = (0x80, 0xFF90)      # link addresses of its code segment
+MP3_TEXT_OFFSET = 0x100        # file offset of that segment
+
+
+def find_task(elf: Path) -> bytes:
+    data = elf.read_bytes()
+    pos = 0
+    while (pos := data.find(b'\x7fELF\x01\x02\x01', pos + 1)) > 0:
+        blob = data[pos:pos + TASK_SIZE]
+        if hashlib.sha256(blob).hexdigest() == TASK_SHA256:
+            return blob
+    raise SystemExit(f'audio SPU task {TASK_SHA256[:16]}... not found in {elf}')
+
+
+def lift(sdk: Path, image: Path, out: Path, prefix: str, extra: list[str]) -> str:
+    out.mkdir(parents=True)
+    subprocess.run([sys.executable, str(sdk / 'tools/spu_lifter.py'),
+                    '--auto-functions', str(image), '--merge-chunks',
+                    '--symbol-prefix', prefix, '--output', str(out),
+                    '--report', str(out / 'report.json'), *extra], check=True)
+    return (out / 'spu_recomp.c').read_text()
+
+
+def compiled_entries(source: str, prefix: str) -> tuple[list[int], list[int]]:
+    """(entries safe to run, entries to keep interpreting).
+
+    A translated indirect CALL invokes spu_indirect_branch() inside its call
+    bracket; an indirect transfer only queues it. spu_bridge.c follows queued
+    transfers of the function it runs, so those are fine at the top, but
+    anything inside a call bracket goes to the runtime's general dispatcher.
+    An untranslatable word anywhere makes the function interpreted too."""
+    bodies = {int(m.group(1), 16): m.group(2) for m in re.finditer(
+        rf'^void {prefix}spu_func_([0-9A-F]{{8}})\(spu_context\* ctx\) \{{\n(.*?)^\}}\n',
+        source, re.S | re.M)}
+    if not bodies:
+        raise SystemExit(f'no translated {prefix} functions found')
+    calls = {a: {int(x, 16) for x in re.findall(rf'{prefix}spu_func_([0-9A-F]{{8}})\(ctx\)', b)}
+             for a, b in bodies.items()}
+    tails = {a: {int(x, 16) for x in re.findall(rf'g_spu_trampoline_fn = {prefix}spu_func_([0-9A-F]{{8}})', b)}
+             for a, b in bodies.items()}
+    call_ib = {a: 'spu_indirect_branch(ctx)' in b or 'spu_unsupported' in b for a, b in bodies.items()}
+    queued_ib = {a: 'g_spu_trampoline_fn = spu_indirect_branch' in b for a, b in bodies.items()}
+    memo: dict[int, bool] = {}
+
+    def nested_bad(a: int, stack: frozenset = frozenset()) -> bool:
+        if a in memo:
+            return memo[a]
+        if a in stack:
+            return False
+        if a not in bodies:
+            memo[a] = True
+            return True
+        bad = call_ib[a] or queued_ib[a] or any(nested_bad(x, stack | {a}) for x in calls[a] | tails[a])
+        memo[a] = bad
+        return bad
+
+    sys.setrecursionlimit(20000)
+    keep = sorted(a for a in bodies if call_ib[a] or any(nested_bad(x) for x in calls[a]))
+    return sorted(set(bodies) - set(keep)), keep
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--sdk', required=True, type=Path, help='ps3recomp checkout')
+    ap.add_argument('--elf', required=True, type=Path, help='decrypted game/EBOOT.ELF')
+    ap.add_argument('--spu', required=True, type=Path, help='generated spu/ directory')
+    ap.add_argument('--dev-flash', type=Path, help='dev_flash root holding sys/external/flashMP3.pic')
+    args = ap.parse_args()
+
+    out = args.spu / 'battride_audio'
+    if out.exists():
+        raise SystemExit(f'refusing to overwrite {out}')
+    out.mkdir(parents=True)
+
+    image = out / 'audio_task.elf'
+    image.write_bytes(find_task(args.elf))
+    task_src = lift(args.sdk, image, out / 'task', 'spu_audio_', ['--code-end', hex(TASK_CODE_END)])
+    image.unlink()      # game data; only the translation is needed
+    if json.loads((out / 'task/report.json').read_text()).get('unsupported'):
+        raise SystemExit('unsupported instructions below the task data tail')
+    _, task_keep = compiled_entries(task_src, 'spu_audio_')
+    lines = ['/* GENERATED by scripts/lift_audio_spu.py -- do not edit, do not publish. */',
+             '#define PORT_AUDIO_LIFTED 1',
+             f'#define PORT_AUDIO_TASK_CODE_END 0x{TASK_CODE_END:X}u',
+             'void spu_audio_spu_recomp_register(void);',
+             '/* Translated task entries that stay interpreted (sorted). */',
+             'static const uint32_t port_audio_interpret_only[] = {',
+             *(f'    0x{a:05X}u,' for a in task_keep), '};']
+    summary = f'task: {len(task_keep)} entries left interpreted'
+
+    codec = args.dev_flash / 'sys/external/flashMP3.pic' if args.dev_flash else None
+    if codec and codec.is_file() and hashlib.sha256(codec.read_bytes()).hexdigest() == MP3_SHA256:
+        rebased = out / 'mp3.elf'
+        subprocess.run([sys.executable, str(args.sdk / 'tools/rebase_spu_elf.py'),
+                        str(codec), str(rebased), hex(MP3_BASE)], check=True)
+        mp3_src = lift(args.sdk, rebased, out / 'mp3', 'spu_mp3_', [])
+        rebased.unlink()
+        code = codec.read_bytes()
+        run, _ = compiled_entries(mp3_src, 'spu_mp3_')
+        lo, hi = MP3_BASE + MP3_TEXT[0], MP3_BASE + MP3_TEXT[1]
+
+        def words(pc: int) -> str:
+            off = MP3_TEXT_OFFSET + pc - lo
+            return ', '.join(f'0x{int.from_bytes(code[off + 4 * i:off + 4 * i + 4], "big"):08X}u'
+                             for i in range(4))
+        run = [a for a in run if lo <= a and a + 16 <= hi]
+        lines += ['#define PORT_AUDIO_CODEC 1',
+                  f'#define PORT_AUDIO_CODEC_LO 0x{lo:X}u',
+                  f'#define PORT_AUDIO_CODEC_HI 0x{hi:X}u',
+                  'void spu_mp3_spu_recomp_register(void);',
+                  '/* Codec entries run translated, with the instructions expected there (sorted). */',
+                  'static const struct { uint32_t pc, w[4]; } port_audio_codec_entries[] = {',
+                  *(f'    {{ 0x{a:05X}u, {{ {words(a)} }} }},' for a in run), '};']
+        summary += f'; flashMP3.pic: {len(run)} entries translated'
+    else:
+        summary += '; flashMP3.pic: not found or not the checked version, stays interpreted'
+    (out / 'audio_task.h').write_text('\n'.join(lines) + '\n')
+    print('audio SPU ' + summary)
+
+
+if __name__ == '__main__':
+    main()

@@ -104,15 +104,32 @@ list(FILTER PORT_RENDER_SOURCES EXCLUDE REGEX "libs/video/rsx_draw_engine\\.c$")
 set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${PORT_RENDER_SOURCES}")
 target_sources(ps3recomp_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/rsx_engine_bridge.c")
 
-# The audio task is interpreted, including runtime-loaded firmware code.
-# Keep its instruction loop and DMA/channel helpers optimized in Debug builds:
-# an unoptimized interpreter misses the 256-sample audio deadlines.
+# The audio task is interpreted, including runtime-loaded firmware code: a
+# port-local interpreter with a decode cache (spu_interp_bridge.c).
+get_target_property(PORT_SPU_SOURCES ps3recomp_runtime SOURCES)
+list(FILTER PORT_SPU_SOURCES EXCLUDE REGEX "runtime/spu/spu_interp\\.c$")
+set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${PORT_SPU_SOURCES}")
+target_sources(ps3recomp_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/spu_interp_bridge.c")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/spu_interp_bridge.c" TARGET_DIRECTORY ps3recomp_runtime
+    PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
+
+# The SDK's channel/MFC layer with cached environment lookups.
+get_target_property(PORT_SPU_CH_SOURCES ps3recomp_runtime SOURCES)
+list(FILTER PORT_SPU_CH_SOURCES EXCLUDE REGEX "runtime/spu/spu_channels\\.c$")
+set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${PORT_SPU_CH_SOURCES}")
+target_sources(ps3recomp_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/spu_channels_bridge.c")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/spu_channels_bridge.c" TARGET_DIRECTORY ps3recomp_runtime
+    PROPERTIES COMPILE_DEFINITIONS "PORT_SPU_CHANNELS_SOURCE=\"${PS3RECOMP_DIR}/runtime/spu/spu_channels.c\""
+               INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
+
+# Keep the interpreter and DMA/channel helpers optimized, with SSE4.1 so the
+# SPU helpers take their vector paths (spu_shufb is a byte loop without it).
 if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
     set_source_files_properties(
-        "${PS3RECOMP_DIR}/runtime/spu/spu_interp.c"
-        "${PS3RECOMP_DIR}/runtime/spu/spu_channels.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/spu_interp_bridge.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/spu_channels_bridge.c"
         TARGET_DIRECTORY ps3recomp_runtime
-        PROPERTIES COMPILE_OPTIONS "-O2")
+        PROPERTIES COMPILE_OPTIONS "-O2;-msse4.1")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -199,6 +216,19 @@ elseif(PORT_ENABLE_SPU)
              "${PS3RECOMP_DIR}/runtime/spu/spu_dispatch_mt.c")
         # Generated beside the lift; each is present only once its generator
         # has been run, so each is included only if it is actually here.
+        # The audio task's code below its data tail and, when the firmware was
+        # available, its MP3 codec (scripts/lift_audio_spu.py); spu_bridge.c
+        # falls back to pure interpretation without them.
+        if(EXISTS "${SPU_DIR}/battride_audio/task/spu_recomp.c")
+            list(APPEND SPU_SOURCES "${SPU_DIR}/battride_audio/task/spu_recomp.c")
+            message(STATUS "  audio SPU task: translated (battride_audio)")
+            if(EXISTS "${SPU_DIR}/battride_audio/mp3/spu_recomp.c")
+                list(APPEND SPU_SOURCES "${SPU_DIR}/battride_audio/mp3/spu_recomp.c")
+                message(STATUS "  audio SPU MP3 codec: translated from the local firmware")
+            endif()
+        else()
+            message(STATUS "  (no battride_audio -- audio SPU task fully interpreted)")
+        endif()
         foreach(gen IN ITEMS spu_workloads.c jobmods_register.c taskset_policy_bytes.c)
             if(EXISTS "${SPU_DIR}/${gen}")
                 list(APPEND SPU_SOURCES "${SPU_DIR}/${gen}")
@@ -235,7 +265,7 @@ if(SPU_SOURCES)
         INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu"
         COMPILE_DEFINITIONS SPU_USE_DISPATCH_MT)
     if(NOT MSVC OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2")
+        set_source_files_properties(${SPU_SOURCES} PROPERTIES COMPILE_OPTIONS "-O2;-msse4.1")
     endif()
 endif()
 
@@ -336,6 +366,6 @@ endif()
 # ---------------------------------------------------------------------------
 install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
 
-set_source_files_properties(spu_bridge.c PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
+set_source_files_properties(spu_bridge.c PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu;${SPU_DIR}")
 
 set_source_files_properties(fs_bridge.cpp PROPERTIES COMPILE_DEFINITIONS "PORT_PPU_FS_SOURCE=\"${PS3RECOMP_DIR}/runtime/ppu/ppu_fs.cpp\"")

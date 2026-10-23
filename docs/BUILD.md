@@ -76,7 +76,17 @@ The script checks the SDK commit and ELF hash, analyzes the executable, generate
 
 PPU generation produces about 593 MiB of sources; also allow space for object files and the executable. On machines with limited RAM, reduce `--jobs` and build parallelism.
 
-SPU generation deliberately uses `--allow-partial`: of the two detected images, only `615f0131…dc0657` is registered statically. The rejected audio image uses the interpreter in `spu_bridge.c`; this is not complete static translation. The generated registry is checked before installing the results. All generated results are ignored by Git.
+SPU generation deliberately uses `--allow-partial`: of the two detected images, only `615f0131…dc0657` is registered statically. The rejected audio image is then translated by `scripts/lift_audio_spu.py` below its data tail (and its MP3 codec from the firmware, when present) into `spu/battride_audio/`; `spu_bridge.c` runs that code and interprets the rest. The generated registry is checked before installing the results. All generated results are ignored by Git.
+
+A checkout generated before that script existed can add the audio translation in place, then reconfigure:
+
+```bash
+../ps3recomp/.venv/bin/python scripts/lift_audio_spu.py --sdk ../ps3recomp \
+  --elf game/EBOOT.ELF --spu spu --dev-flash firmware/dev_flash
+cmake --preset linux-vulkan -DPython3_EXECUTABLE="$PWD/../ps3recomp/.venv/bin/python"
+```
+
+The SPU sources, interpreter and channel layer are built with `-msse4.1` (x86-64-v2 CPUs, which current Fedora already requires).
 
 The script uses these tools and options:
 
@@ -88,6 +98,8 @@ ppu_lifter.py game/EBOOT.ELF --functions <analysis>/EBOOT.functions.json
 patch --batch --fuzz=0 -p1 -i patches/graphics-command-buffer-init.patch
 build_spu_workloads.py --input game/EBOOT.ELF --lifted <spu-sources>
   --out <spu-sources>/spu_workloads.c --constructor --allow-partial
+scripts/lift_audio_spu.py --sdk <sdk> --elf game/EBOOT.ELF --spu <spu-sources>
+  [--dev-flash <dev_flash>]
 ```
 
 Use the script to run the sequence: it manages temporary directories and checks. `config.toml` is a reference configuration; this generation is controlled by the options above and `recompile.json`.
@@ -103,7 +115,7 @@ cmake --build --preset linux-vulkan
 
 For a different SDK location, add `-DPS3RECOMP_DIR=/path/to/ps3recomp` during configuration. Check that CMake reports `guest programs available` for Vulkan: without glslang, game shaders do not work correctly. The SDK loads Vulkan dynamically.
 
-The game uses the `game/` tree as its VFS and creates installed data/saves in `gamedata/`. The launcher enables the window and shaders. The 2×32 MiB command-buffer expansion is no longer needed now that `sys_lwcond` blocks (see the README) and is off by default; `PORT_GCM_EXPAND_BUFFERS=1 ./run-vulkan.sh` re-enables it, and `PORT_LWCOND_SDK=1` restores the SDK's polling `sys_lwcond` for comparison. `PORT_GCM_FRAME_STATS=120` prints command volume, draws and buffer usage every 120 flips. There is no automatic time limit; `PORT_TEST_SECONDS=300 ./run-vulkan.sh` limits a diagnostic run. Graceful shutdown has not been validated on every path; time-limited tests sometimes required SIGKILL.
+The game uses the `game/` tree as its VFS and creates installed data/saves in `gamedata/`. The launcher enables the window and shaders. The 2×32 MiB command-buffer expansion is no longer needed now that `sys_lwcond` blocks (see the README) and is off by default; `PORT_GCM_EXPAND_BUFFERS=1 ./run-vulkan.sh` re-enables it, and `PORT_LWCOND_SDK=1` restores the SDK's polling `sys_lwcond` for comparison. `PORT_GCM_FRAME_STATS=120` prints command volume, draws and buffer usage every 120 flips. `PORT_AUDIO_STATS=1` prints, every 5 s, how often a cellAudio block was still empty when its turn came; `PORT_SPU_PROFILE=<file>` writes where the audio SPU task spends interpreted time; `PORT_AUDIO_INTERPRET=1` runs that task fully interpreted. There is no automatic time limit; `PORT_TEST_SECONDS=300 ./run-vulkan.sh` limits a diagnostic run. Graceful shutdown has not been validated on every path; time-limited tests sometimes required SIGKILL.
 
 ## 5. Verify
 

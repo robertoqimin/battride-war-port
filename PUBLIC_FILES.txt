@@ -24,7 +24,10 @@ sail_bridge.cpp
 sail_decoder.hpp
 scripts/export_source.py
 scripts/generate.py
+scripts/lift_audio_spu.py
 spu_bridge.c
+spu_channels_bridge.c
+spu_interp_bridge.c
 stubs.cpp
 tests/test_fs_offset.cpp
 tests/test_gcm_jump.c

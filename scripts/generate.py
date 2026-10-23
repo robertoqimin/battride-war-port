@@ -64,6 +64,14 @@ def main():
         registered = {x['sha256'] for x in inventory['programs'] if x['status'] == 'registered'}
         if registered != set(spec['registered_spu_sha256']):
             raise RuntimeError('unexpected SPU registry; generated sources were not installed')
+        # The audio task (and, with the firmware present, its MP3 codec):
+        # rejected by the generic pipeline, translated below its data tail.
+        dev_flash = Path(os.environ.get('PS3_DEV_FLASH') or ROOT / 'firmware/dev_flash')
+        audio = [sys.executable, ROOT / 'scripts/lift_audio_spu.py', '--sdk', sdk,
+                 '--elf', elf, '--spu', spu]
+        if dev_flash.is_dir():
+            audio += ['--dev-flash', dev_flash]
+        run(audio)
         if len(list(ppu.glob('ppu_recomp_*.cpp'))) != spec['ppu_chunks']:
             raise RuntimeError('unexpected PPU chunk layout; generated sources were not installed')
         # Keep the generated CMake source list useful after moving the stage.
@@ -76,7 +84,7 @@ def main():
             path.parent.mkdir(parents=True, exist_ok=True)
         for source, dest in zip((ppu, spu, analysis), destinations):
             source.rename(dest)
-    print('Generated sources installed locally; SPU audio uses the interpreter fallback.')
+    print('Generated sources installed locally; the audio SPU task is translated below its data tail.')
     print('Do not publish game/, src/recomp/, spu/ or analysis/.')
 
 if __name__ == '__main__':

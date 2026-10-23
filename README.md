@@ -14,7 +14,9 @@ This repository contains port code, configuration, tests, and instructions. **It
 
 - Performance in mission combat went from about 6 to about 30 frames per second, the game's original rate (GTX 1650, three 30-40 s measurements: 29.7, 30.3, 30.7): the preset now builds with `-O2` instead of `-O0`; the Vulkan backend records draws, clears and uploads into batched command buffers (two slots, so the GPU renders one frame while the next is recorded) instead of submitting and waiting per draw (`PS3RECOMP_VK_SYNC=1` restores that); guest stores skip the debug watch checks when none is armed; the frame clock wakes on guest fence waits and presents without waiting for the GPU. The game's render thread is then close to fully busy, so heavier scenes may still dip. The intro still reaches the title both when skipped with START and when it plays to the end.
 
-**The experience is still not smooth:** there is intermittent excessive brightness and incorrect effects/colors. Defeating enemies, completing missions, the full game, and prolonged stability have not been validated. Audio still has interruptions.
+- Audio no longer breaks up. The game's audio SPU task ran interpreted and filled only about a third of the cellAudio blocks in time (4 blocks of sound, 8 of silence, repeating). `scripts/lift_audio_spu.py` now translates the task's code below its data tail and, when the firmware is present, the `flashMP3.pic` codec it loads (README_FIRMWARE.md); `spu_bridge.c` runs that code and interprets the rest. Measured on the title music and 45 s of mission combat: no empty blocks while sound plays (`PORT_AUDIO_STATS=1` reports this), still at about 30 fps. The interpreter got a decode cache, and the SDK channel layer's per-access `getenv` was cached. Prolonged sessions and other stages have not been checked.
+
+**The experience is still not smooth:** there is intermittent excessive brightness and incorrect effects/colors. Defeating enemies, completing missions, the full game, and prolonged stability have not been validated.
 
 The long gameplay session used a six-second PAMF replacement solely to speed up the introduction. Original assets were not modified; the normal launcher still uses the original video. The entire sequence with that video was not repeated during the latest gameplay validation.
 
@@ -36,7 +38,8 @@ Generation refuses to overwrite existing results. Expect about 593 MiB of PPU so
 
 ## Port components
 
-- `spu_bridge.c`: interprets the audio task rejected by the static translator; another SPU image is generated and registered statically.
+- `spu_bridge.c`: runs the audio task rejected by the static translator, translated where `scripts/lift_audio_spu.py` could and interpreted elsewhere (`PORT_AUDIO_INTERPRET=1` interprets all of it); another SPU image is generated and registered statically.
+- `spu_interp_bridge.c`, `spu_channels_bridge.c`: the SDK's SPU interpreter with a decode cache, and its channel layer with cached environment lookups.
 - `sail_bridge.cpp`, `sail_decoder.hpp`, `sail_audio.hpp`: PAMF callbacks, video, and audio. See [README_SAIL.md](README_SAIL.md).
 - `audio_bridge.c`, `fs_bridge.cpp`: local extensions to SDK audio and VFS.
 - `gcm_bridge.c`, `rsx_engine_bridge.c`, `vulkan_bridge.c`, `loader_bridge.cpp`: local adaptations of SDK implementations; the official checkout remains separate.
