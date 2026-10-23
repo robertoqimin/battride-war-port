@@ -93,8 +93,13 @@ extern "C" void ps3_load_prx_modules(void)
 
 /* BLJS10220 import adapters; all pointer arguments remain guest EAs. */
 #include "ppu_recomp.h"
+#include "ps3emu/nid.h"
 #include <cstdint>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <unordered_map>
 extern "C" {
 void ps3_hle_register_ctx(uint32_t, const char*, void (*)(ppu_context*));
 int32_t cellKbGetData(uint32_t, void*);
@@ -247,6 +252,88 @@ static void port_save_list_auto(ppu_context* c)
     std::fprintf(stderr,"[port-save] ListAutoSave -> 0x%08X userdata=0x%08X\n",(uint32_t)result,userdata);
     c->gpr[3]=(uint64_t)(int64_t)result;
 }
+/* sys_lwcond with real blocking. The SDK models lwcond as a 1 ms poll with
+ * no-op signals, which is only correct for waiters that re-check a predicate
+ * in a loop. This title's frame event (renderer task: lock; if (!flag)
+ * lwcond_wait; unlock) waits exactly once, so the render thread fell through
+ * every 1 ms and re-rendered the whole frame dozens of times per flip: that
+ * is where the ~19 MiB command arenas and the frame-time spiral came from.
+ * Waiters sleep on a host condition variable keyed by the lwcond EA; the
+ * paired guest lwmutex is released and re-taken through the SDK's own
+ * lwmutex handlers so its ownership bookkeeping stays in one place.
+ * PORT_LWCOND_SDK=1 keeps the SDK behaviour. */
+extern "C" void ps3_hle_call(uint32_t nid, ppu_context* ctx);
+namespace {
+struct PortLwcond { std::mutex m; std::condition_variable cv; uint64_t gen = 0; uint32_t waiters = 0, tokens = 0; };
+std::mutex s_lwcond_map_lock;
+std::unordered_map<uint32_t, PortLwcond*> s_lwconds;
+PortLwcond& port_lwcond(uint32_t ea)
+{
+    std::lock_guard<std::mutex> g(s_lwcond_map_lock);
+    PortLwcond*& c = s_lwconds[ea];
+    if (!c) c = new PortLwcond;   /* lives for the process: guests reuse lwcond storage */
+    return *c;
+}
+void port_lwmutex_call(const ppu_context* from, const char* name, uint32_t lwm)
+{
+    ppu_context call = *from;   /* same thread id: the lwmutex stamps its owner from it */
+    call.gpr[3] = lwm; call.gpr[4] = 0;
+    ps3_hle_call(ps3_compute_nid(name), &call);
+}
+}
+static void port_lwcond_signal(ppu_context* c)
+{
+    PortLwcond& lc = port_lwcond((uint32_t)c->gpr[3]);
+    { std::lock_guard<std::mutex> g(lc.m); if (lc.waiters > lc.tokens) lc.tokens++; }
+    lc.cv.notify_all();
+    c->gpr[3] = 0;
+}
+static void port_lwcond_signal_all(ppu_context* c)
+{
+    PortLwcond& lc = port_lwcond((uint32_t)c->gpr[3]);
+    { std::lock_guard<std::mutex> g(lc.m); lc.gen++; lc.tokens = 0; }
+    lc.cv.notify_all();
+    c->gpr[3] = 0;
+}
+static void port_lwcond_wait(ppu_context* c)
+{
+    const uint32_t ea = (uint32_t)c->gpr[3], lwm = vm_read32(ea);
+    const uint64_t timeout_us = c->gpr[4];
+    PortLwcond& lc = port_lwcond(ea);
+    std::unique_lock<std::mutex> lk(lc.m);
+    /* The generation is taken while the guest lwmutex is still held, so a
+     * signaller that takes it after the release below cannot be missed. */
+    const uint64_t gen = lc.gen;
+    lc.waiters++;
+    const uint32_t recursion = vm_read32(lwm + 0x0C);
+    vm_write32(lwm + 0x0C, 1);
+    port_lwmutex_call(c, "sys_lwmutex_unlock", lwm);
+    auto woken = [&] { return lc.gen != gen || lc.tokens > 0; };
+    bool ok = true;
+    if (timeout_us) ok = lc.cv.wait_for(lk, std::chrono::microseconds(timeout_us), woken);
+    else while (!lc.cv.wait_for(lk, std::chrono::seconds(10), woken))
+        std::fprintf(stderr, "[port-lwcond] tid=%llu still waiting on lwcond %08X (lwmutex %08X)\n",
+                     (unsigned long long)c->thread_id, ea, lwm);
+    if (ok && lc.gen == gen) lc.tokens--;
+    lc.waiters--;
+    lk.unlock();
+    port_lwmutex_call(c, "sys_lwmutex_lock", lwm);
+    vm_write32(lwm + 0x0C, recursion ? recursion : 1);
+    c->gpr[3] = ok ? 0 : (uint64_t)(int64_t)(int32_t)0x8001000Bu;   /* ETIMEDOUT */
+}
+/* Called before ppu_sysprx_register: HLE dispatch takes the first handler
+ * registered for a NID, so overrides of the SDK's CRT must come first. */
+extern "C" void port_register_hle_early(void)
+{
+    const char* sdk = std::getenv("PORT_LWCOND_SDK");
+    if (sdk && *sdk && *sdk != '0') return;
+    ps3_hle_register_ctx(ps3_compute_nid("sys_lwcond_signal"), "sys_lwcond_signal", port_lwcond_signal);
+    ps3_hle_register_ctx(ps3_compute_nid("sys_lwcond_signal_to"), "sys_lwcond_signal_to", port_lwcond_signal);
+    ps3_hle_register_ctx(ps3_compute_nid("sys_lwcond_signal_all"), "sys_lwcond_signal_all", port_lwcond_signal_all);
+    ps3_hle_register_ctx(ps3_compute_nid("sys_lwcond_wait"), "sys_lwcond_wait", port_lwcond_wait);
+    std::fprintf(stderr, "[port] blocking sys_lwcond installed\n");
+}
+
 extern "C" void port_register_sail(void);
 extern "C" void port_register_hle(void)
 {
@@ -270,18 +357,24 @@ extern "C" void port_register_hle(void)
     std::fprintf(stderr, "[port] keyboard/font/SPU printf/search lifecycle adapters installed\n");
 }
 
-/* This runtime can emit >18 MiB for the opening mission's frame. The title's
- * two 4 MiB command arenas otherwise run into its CPU render metadata. Give
- * empty contexts separate mapped storage; this is a capacity workaround, not
- * a fix for the excessive draw/state traffic. The launcher enables it. */
+/* Before the blocking sys_lwcond above, the render thread redrew the opening
+ * mission's frame dozens of times per flip and filled >18 MiB, running the
+ * title's two 4 MiB command arenas into its CPU render metadata. This gives
+ * empty contexts separate mapped storage instead. With the lwcond fix a
+ * mission frame peaks near 0.5 MiB, so the launcher leaves it off; it stays
+ * as an opt-in (PORT_GCM_EXPAND_BUFFERS=1) safety net. */
 extern "C" int64_t sys_memory_allocate(ppu_context*);
 extern "C" int64_t sys_memory_free(ppu_context*);
 extern "C" int32_t cellGcmMapMainMemory(uint32_t,uint32_t,uint32_t*);
+/* The title's two command-arena contexts, for PORT_GCM_FRAME_STATS in
+ * gcm_bridge.c. Recorded whether or not the arenas are relocated. */
+extern "C" { uint32_t port_arena_ctx[2] = {0, 0}; }
 extern "C" void port_expand_graphics_buffers(ppu_context* original, uint32_t renderer)
 {
+    const uint32_t a=vm_read32(renderer+0x100), b=vm_read32(renderer+0x104);
+    if (a && b) { port_arena_ctx[0]=a; port_arena_ctx[1]=b; }
     const char* enabled=std::getenv("PORT_GCM_EXPAND_BUFFERS");
     if (!enabled || !*enabled || *enabled=='0') return;
-    const uint32_t a=vm_read32(renderer+0x100), b=vm_read32(renderer+0x104);
     if (!a || !b || vm_read32(a+8)!=vm_read32(a) || vm_read32(b+8)!=vm_read32(b) ||
         vm_read32(a+4)-vm_read32(a)!=0x3fffc0u ||
         vm_read32(b+4)-vm_read32(b)!=0x3fffc0u) return;

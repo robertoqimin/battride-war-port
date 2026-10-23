@@ -31,6 +31,8 @@ tests/test_gcm_jump.c
 tests/test_gcm_jump.sh
 tests/test_graphics_buffers.cpp
 tests/test_graphics_buffers.sh
+tests/test_lwcond.cpp
+tests/test_lwcond.sh
 tests/test_publication.py
 tests/test_sail.cpp
 tests/test_sail.sh

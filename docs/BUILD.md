@@ -103,7 +103,7 @@ cmake --build --preset linux-vulkan
 
 For a different SDK location, add `-DPS3RECOMP_DIR=/path/to/ps3recomp` during configuration. Check that CMake reports `guest programs available` for Vulkan: without glslang, game shaders do not work correctly. The SDK loads Vulkan dynamically.
 
-The game uses the `game/` tree as its VFS and creates installed data/saves in `gamedata/`. The launcher enables the window, shaders, and expanded buffers. There is no automatic time limit; `PORT_TEST_SECONDS=300 ./run-vulkan.sh` limits a diagnostic run. Graceful shutdown has not been validated on every path; time-limited tests sometimes required SIGKILL.
+The game uses the `game/` tree as its VFS and creates installed data/saves in `gamedata/`. The launcher enables the window and shaders. The 2×32 MiB command-buffer expansion is no longer needed now that `sys_lwcond` blocks (see the README) and is off by default; `PORT_GCM_EXPAND_BUFFERS=1 ./run-vulkan.sh` re-enables it, and `PORT_LWCOND_SDK=1` restores the SDK's polling `sys_lwcond` for comparison. `PORT_GCM_FRAME_STATS=120` prints command volume, draws and buffer usage every 120 flips. There is no automatic time limit; `PORT_TEST_SECONDS=300 ./run-vulkan.sh` limits a diagnostic run. Graceful shutdown has not been validated on every path; time-limited tests sometimes required SIGKILL.
 
 ## 5. Verify
 
@@ -111,6 +111,7 @@ The game uses the `game/` tree as its VFS and creates installed data/saves in `g
 python3 -m unittest discover -s tests -p test_publication.py
 python3 scripts/export_source.py
 bash tests/test_graphics_buffers.sh
+bash tests/test_lwcond.sh
 bash tests/test_gcm_jump.sh
 bash tests/test_sail.sh
 ```

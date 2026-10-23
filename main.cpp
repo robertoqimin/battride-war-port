@@ -75,6 +75,7 @@ int      ppu_run(uint32_t entry_opd, uint32_t stack_top);
 void     ps3_load_prx_modules(void);
 void     cellGame_init_from_paramsfo(const char*);
 void     port_register_hle(void);
+void     port_register_hle_early(void);
 void     port_sail_poll(void);
 void     port_register_spu(void);
 
@@ -376,6 +377,7 @@ int main(int argc, char** argv)
     ppu_recomp_register();   /* lifted function table -> address map */
     ps3_load_prx_modules();  /* this game's lifted system PRX, if it has any */
     ppu_hle_init();          /* firmware import NID -> HLE handlers */
+    port_register_hle_early();  /* overrides of the CRT below: first registration wins */
     ppu_sysprx_register();   /* boot-critical CRT */
     ppu_fs_register();       /* cellFs over the game directory */
     lv2_init_syscalls();     /* the lv2 syscall table */

@@ -10,7 +10,7 @@ This repository contains port code, configuration, tests, and instructions. **It
 - `cellFsReadWithOffset`, game data installation, and save adapters are implemented. In the tested environment, 21,107 installed files were compared with the disc files using SHA-256, with no differences.
 - Vertex textures are implemented in the local Vulkan backend, allowing the character animation to render.
 - The start of mission **STG02** was reached: scenery, character, enemies, HUD, movement, pause/resume, and attacks were observed. The counter reached **5 Combo**. A session lasting approximately 557 seconds was stopped intentionally; the original save remained unchanged.
-- The opening mission can produce about 19 MiB of commands in this runtime. The original 4 MiB buffers overflowed into renderer data. Two separate 32 MiB buffers prevent this overwrite in the tested section, using an additional 64 MiB of guest memory. This is a capacity workaround; the cause of the excessive command traffic remains under investigation.
+- The opening mission used to produce about 19 MiB of commands per flip, overflowing the title's 4 MiB command buffers. The cause was the SDK's `sys_lwcond`, a 1 ms poll whose signals do nothing: the game's render thread waits once on a frame event and fell through, redrawing the whole frame dozens of times per flip (708 renders against 9 flips in a 15 s sample). The port now overrides `sys_lwcond` with real blocking (`stubs.cpp`). A mission frame then peaks near 0.5 MiB, and the mission ran with the original 4 MiB buffers. The earlier 2×32 MiB workaround is off by default and remains available with `PORT_GCM_EXPAND_BUFFERS=1`; `PORT_LWCOND_SDK=1` restores the SDK behaviour. `PORT_GCM_FRAME_STATS=<flips>` prints per-flip command volume, draw signatures and buffer usage.
 
 **The experience is still not smooth:** performance is very low and variable, with intermittent excessive brightness and incorrect effects/colors. Defeating enemies, completing missions, the full game, and prolonged stability have not been validated. Audio still has interruptions.
 
@@ -38,7 +38,7 @@ Generation refuses to overwrite existing results. Expect about 593 MiB of PPU so
 - `sail_bridge.cpp`, `sail_decoder.hpp`, `sail_audio.hpp`: PAMF callbacks, video, and audio. See [README_SAIL.md](README_SAIL.md).
 - `audio_bridge.c`, `fs_bridge.cpp`: local extensions to SDK audio and VFS.
 - `gcm_bridge.c`, `rsx_engine_bridge.c`, `vulkan_bridge.c`, `loader_bridge.cpp`: local adaptations of SDK implementations; the official checkout remains separate.
-- `stubs.cpp`: game HLE adapters and graphics buffer allocation.
+- `stubs.cpp`: game HLE adapters, blocking `sys_lwcond`, and the optional graphics buffer expansion.
 - `patches/graphics-command-buffer-init.patch`: minimal integration call to apply after PPU generation.
 
 Local firmware codecs and their limitations are documented in [README_FIRMWARE.md](README_FIRMWARE.md).

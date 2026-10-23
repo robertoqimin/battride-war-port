@@ -1727,6 +1727,136 @@ static int gcm_get_eq_put(void)
     return eq;
 }
 
+/* PORT_GCM_FRAME_STATS=<flips>: per-flip FIFO composition for the command
+ * traffic investigation. Counts every method dword the walker dispatches and
+ * every branch it takes between FIFO flip words, then every <flips> flips
+ * prints the average/peak per frame, the dominant methods, and how far the
+ * title's two command arenas (port_arena_ctx, from stubs.cpp) had been filled
+ * when each was reset. Diagnostic only; no effect on the walk. */
+extern u32 port_arena_ctx[2] __attribute__((weak));
+static int s_fstat_on = -1;
+static struct {
+    u64 dw, hdr, jmp, call, draws, flips, peak_dw, peak_draws;
+    u64 cur_dw, cur_draws;
+    u32 cur_vp, cur_2d, cur_sem, cur_ref, cur_clr, cur_surf;
+    u32 meth[8][0x800];
+    u32 arena_last[2], arena_peak[2], arena_resets[2];
+    u64 arena_sum[2];
+} s_fstat;
+static int gcm_fstat_enabled(void)
+{
+    if (s_fstat_on < 0) { const char* e = getenv("PORT_GCM_FRAME_STATS"); s_fstat_on = e ? atoi(e) : 0; }
+    return s_fstat_on > 0;
+}
+/* Draw signatures for PORT_GCM_FRAME_STATS: which (fragment program, vertex
+ * program, texture 0, primitive) the draws of a heavy frame are made of. */
+#define FSIG_N 512
+static struct { u32 fp, vp, tex, prim, draws, verts; } s_fsig[FSIG_N];
+static u32 s_fsig_n, s_fsig_fp, s_fsig_vp, s_fsig_tex, s_fsig_prim, s_fsig_dumps;
+static void gcm_fsig_draw(u32 verts)
+{
+    for (u32 i = 0; i < s_fsig_n; i++)
+        if (s_fsig[i].fp == s_fsig_fp && s_fsig[i].vp == s_fsig_vp &&
+            s_fsig[i].tex == s_fsig_tex && s_fsig[i].prim == s_fsig_prim) {
+            s_fsig[i].draws++; s_fsig[i].verts += verts; return; }
+    if (s_fsig_n < FSIG_N) {
+        s_fsig[s_fsig_n].fp = s_fsig_fp; s_fsig[s_fsig_n].vp = s_fsig_vp;
+        s_fsig[s_fsig_n].tex = s_fsig_tex; s_fsig[s_fsig_n].prim = s_fsig_prim;
+        s_fsig[s_fsig_n].draws = 1; s_fsig[s_fsig_n].verts = verts; s_fsig_n++; }
+}
+static void gcm_fsig_flip(u64 draws)
+{
+    if (draws >= 5000 && s_fsig_dumps < 4) {
+        s_fsig_dumps++;
+        fprintf(stderr, "[fsig] heavy frame: %llu draws, %u signatures\n", (unsigned long long)draws, s_fsig_n);
+        for (int top = 0; top < 16; top++) {
+            u32 bi = FSIG_N, bd = 0;
+            for (u32 i = 0; i < s_fsig_n; i++) if (s_fsig[i].draws > bd) { bd = s_fsig[i].draws; bi = i; }
+            if (bi == FSIG_N) break;
+            fprintf(stderr, "[fsig]   draws=%u verts=%u fp=%08X vp=%08X tex0=%08X prim=%u\n", s_fsig[bi].draws,
+                    s_fsig[bi].verts, s_fsig[bi].fp, s_fsig[bi].vp, s_fsig[bi].tex, s_fsig[bi].prim);
+            s_fsig[bi].draws = 0;
+        }
+    }
+    s_fsig_n = 0;
+}
+static void gcm_fstat_method(u32 subch, u32 m, u32 v)
+{
+    if (!subch) switch (m & 0x1FFCu) {
+    case 0x08E4: s_fsig_fp = v; break;                 /* SHADER_PROGRAM */
+    case 0x1E9C: s_fsig_vp = v; break;                 /* TRANSFORM_PROGRAM_LOAD */
+    case 0x1EA0: s_fsig_vp = 0x80000000u | v; break;   /* TRANSFORM_PROGRAM_START */
+    case 0x1A00: s_fsig_tex = v; break;                /* TEXTURE_OFFSET(0) */
+    case 0x1808: if (v) s_fsig_prim = v; break;        /* BEGIN_END */
+    case 0x1814: case 0x1824: gcm_fsig_draw((v >> 24) + 1u); break;
+    }
+    s_fstat.dw++; s_fstat.cur_dw++;
+    s_fstat.meth[subch & 7][(m & 0x1FFCu) >> 2]++;
+    if (!subch && (m & 0x1FFCu) == 0x1808u && v) { s_fstat.draws++; s_fstat.cur_draws++; }
+    if (!subch && (m & 0x1FFCu) == 0x1E9Cu) s_fstat.cur_vp++;     /* TRANSFORM_PROGRAM_LOAD */
+    if (subch == 5 && (m & 0x1FFCu) == 0x0304u) s_fstat.cur_2d++;  /* NV308A SET_POINT */
+    if ((m & 0x1FFCu) == 0x006Cu || (m & 0x1FFCu) == 0x1D6Cu) s_fstat.cur_sem++;  /* semaphore releases */
+    if ((m & 0x1FFCu) == 0x0050u) s_fstat.cur_ref++;                                /* SET_REFERENCE */
+    if (!subch && (m & 0x1FFCu) == 0x1D94u) s_fstat.cur_clr++;                     /* CLEAR_SURFACE */
+    if (!subch && (m & 0x1FFCu) == 0x0194u) s_fstat.cur_surf++;                    /* SURFACE_COLOR_AOFFSET */
+}
+static void gcm_fstat_flip(void)
+{
+    /* Any flip window over 1 MiB is reported on its own: the overflow is a
+     * spike, and a 120-flip average hides it. */
+    {   static unsigned long long last_ms; static u32 last_req, last_q;
+        const unsigned long long now = ps3_ms_now();
+        if (s_fstat.cur_dw * 4u >= 0x100000u)
+            fprintf(stderr, "[fstat-spike] flip=%llu dt=%llums flipreq=%u queued=%u sem=%u ref=%u clr=%u surf=%u %lluKiB draws=%llu vp=%u inline2d=%u arena=%uKiB/%uKiB\n",
+                    (unsigned long long)s_fstat.flips, now - last_ms, s_flip_req_seq - last_req,
+                    s_fifo_flips_queued - last_q, s_fstat.cur_sem, s_fstat.cur_ref, s_fstat.cur_clr, s_fstat.cur_surf,
+                    (unsigned long long)(s_fstat.cur_dw >> 8), (unsigned long long)s_fstat.cur_draws,
+                    s_fstat.cur_vp, s_fstat.cur_2d,
+                    &port_arena_ctx && port_arena_ctx[0] ? (vm_read32(port_arena_ctx[0] + 8) - vm_read32(port_arena_ctx[0])) >> 10 : 0,
+                    &port_arena_ctx && port_arena_ctx[1] ? (vm_read32(port_arena_ctx[1] + 8) - vm_read32(port_arena_ctx[1])) >> 10 : 0);
+        s_fstat.cur_vp = s_fstat.cur_2d = s_fstat.cur_sem = s_fstat.cur_ref = s_fstat.cur_clr = s_fstat.cur_surf = 0;
+        last_ms = now; last_req = s_flip_req_seq; last_q = s_fifo_flips_queued; }
+    if (s_fstat.cur_dw > s_fstat.peak_dw) s_fstat.peak_dw = s_fstat.cur_dw;
+    if (s_fstat.cur_draws > s_fstat.peak_draws) s_fstat.peak_draws = s_fstat.cur_draws;
+    gcm_fsig_flip(s_fstat.cur_draws);
+    s_fstat.cur_dw = s_fstat.cur_draws = 0;
+    s_fstat.flips++;
+    if (&port_arena_ctx != 0) for (int i = 0; i < 2; i++) {
+        const u32 c = port_arena_ctx[i];
+        if (!c) continue;
+        const u32 used = vm_read32(c + 8) - vm_read32(c);
+        if (used < s_fstat.arena_last[i]) {
+            s_fstat.arena_resets[i]++;
+            s_fstat.arena_sum[i] += s_fstat.arena_last[i];
+            if (s_fstat.arena_last[i] > s_fstat.arena_peak[i]) s_fstat.arena_peak[i] = s_fstat.arena_last[i];
+        }
+        s_fstat.arena_last[i] = used;
+    }
+    if (s_fstat.flips < (u64)s_fstat_on) return;
+    const double f = (double)s_fstat.flips;
+    fprintf(stderr, "[fstat] flips=%llu avg=%.0fKiB/frame peak=%.0fKiB draws=%.0f/frame peak=%llu hdr=%.0f jmp=%.0f call=%.0f\n",
+            (unsigned long long)s_fstat.flips, s_fstat.dw * 4.0 / 1024.0 / f, s_fstat.peak_dw * 4.0 / 1024.0,
+            s_fstat.draws / f, (unsigned long long)s_fstat.peak_draws, s_fstat.hdr / f, s_fstat.jmp / f, s_fstat.call / f);
+    for (int i = 0; i < 2; i++) if (&port_arena_ctx != 0 && port_arena_ctx[i])
+        fprintf(stderr, "[fstat] arena%d now=%uKiB resets=%u avg_fill=%.0fKiB peak_fill=%uKiB\n", i,
+                s_fstat.arena_last[i] >> 10, s_fstat.arena_resets[i],
+                s_fstat.arena_resets[i] ? s_fstat.arena_sum[i] / 1024.0 / s_fstat.arena_resets[i] : 0.0,
+                s_fstat.arena_peak[i] >> 10);
+    fprintf(stderr, "[fstat] top dwords/frame:");
+    for (int top = 0; top < 20; top++) {
+        u32 bs = 0, bm = 0, bc = 0;
+        for (u32 sc = 0; sc < 8; sc++) for (u32 mi = 0; mi < 0x800; mi++)
+            if (s_fstat.meth[sc][mi] > bc) { bc = s_fstat.meth[sc][mi]; bs = sc; bm = mi; }
+        if (!bc) break;
+        fprintf(stderr, " %u:%04X=%.0f", bs, bm << 2, bc / f);
+        s_fstat.meth[bs][bm] = 0;
+    }
+    fprintf(stderr, "\n");
+    const u32 keep_last[2] = { s_fstat.arena_last[0], s_fstat.arena_last[1] };
+    memset(&s_fstat, 0, sizeof s_fstat);
+    s_fstat.arena_last[0] = keep_last[0]; s_fstat.arena_last[1] = keep_last[1];
+}
+
 static void gcm_rsx_process_fifo_unlocked(void)
 {
     { static unsigned _n = 0; static unsigned long long _t0 = 0;
@@ -1976,10 +2106,12 @@ static void gcm_rsx_process_fifo_unlocked(void)
              * commands ahead of it. */
             /* This synchronous backend must hand each completed frame to
              * the host before consuming commands which may reuse its buffers. */
+            if (gcm_fstat_enabled()) gcm_fstat_flip();
             { why = "flip"; break; }
         }
 
         if (type == 1 || (w & 0xE0000003u) == 1u) {
+            if (gcm_fstat_enabled()) s_fstat.jmp++;
             /* NV command streams also use the legacy offset|1 jump form.
              * Its destination must not be decoded as a method header. */
             { static int _rd = -1; if (_rd < 0) _rd = getenv("GCM_RECDBG") ? 1 : 0;
@@ -2040,6 +2172,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
             continue;
         }
         if ((w & 3) == 2) {                    /* CALL: offset | 2 */
+            if (gcm_fstat_enabled()) s_fstat.call++;
             { u32 tgt = w & 0x1FFFFFFCu;
               if (!gcm_io2ea(tgt)) { gcm_fifo_bad_branch("CALL", tgt, w); gcm_fifo_resync_why("unmapped-CALL", &s_fifo_getoff, put); break; }
               s_fifo_calloff = s_fifo_getoff + 4;
@@ -2052,6 +2185,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
             continue;
         }
         if (type == 0 || type == 2) {          /* method (incrementing / NI) */
+            if (gcm_fstat_enabled()) s_fstat.hdr++;
             u32 count  = (w >> 18) & 0x7FF;
             u32 method = w & 0x1FFCu;
             u32 subch  = (w >> 13) & 7;
@@ -2244,6 +2378,7 @@ static void gcm_rsx_process_fifo_unlocked(void)
                 { static int live = -1;
                   if (live < 0) live = rsx_live_draw_enabled();
                   if (live) rsx_live_draw_method((subch << 13) | m, vm_read32(dea)); }
+                if (gcm_fstat_enabled()) gcm_fstat_method(subch, m, vm_read32(dea));
                 /* GCM_METHOD_HIST=<secs>: every <secs>, the most frequent
                  * (subchannel, method) pairs dispatched since the last report --
                  * what a frame is actually made of when nothing draws. */
