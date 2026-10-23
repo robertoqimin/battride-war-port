@@ -1,10 +1,10 @@
-# Publicar o código
+# Publishing the code
 
-`PUBLIC_FILES.txt` é a lista explícita de arquivos deste pacote de fontes. `.gitignore` exclui jogo, firmware, saves, resultados gerados, compilações e logs. Não use `git add -f` nessas pastas.
+`PUBLIC_FILES.txt` is the explicit file allowlist for this source package. `.gitignore` excludes the game, firmware, saves, generated output, builds, and logs. Do not use `git add -f` on those directories.
 
-## Conferir e empacotar
+## Check and package
 
-Na raiz do projeto:
+From the project root:
 
 ```bash
 python3 -m unittest discover -s tests -p test_publication.py
@@ -13,13 +13,13 @@ python3 scripts/export_source.py --output /tmp/kamenriderbattridewarsport-source
   --manifest /tmp/kamenriderbattridewarsport-source-manifest.json
 ```
 
-Os nomes de saída precisam estar livres. O exportador nunca sobrescreve arquivos existentes. Ele aceita somente os arquivos de texto explicitamente listados, rejeita symlinks e caminhos privados e cria um ZIP sem histórico Git ou dados locais. Essa verificação não substitui a revisão de conteúdo quando o código for alterado futuramente.
+Output paths must not already exist. The exporter never overwrites existing files. It accepts only explicitly listed text files, rejects symlinks and private paths, and creates a ZIP without Git history or local data. This check does not replace content review when the code changes in the future.
 
-Para publicar pela interface do GitHub, extraia esse ZIP e envie os arquivos contidos na pasta, não a sua árvore local inteira.
+To publish through the GitHub interface, extract this ZIP and upload the files inside its directory, rather than your entire local tree.
 
-## Publicar com Git
+## Publish with Git
 
-Crie um repositório vazio no seu GitHub. Depois, na raiz do port, se ainda não houver um repositório Git:
+Create an empty repository on your GitHub account. Then, from the port root, if there is no Git repository yet:
 
 ```bash
 git init --initial-branch=main
@@ -28,18 +28,18 @@ git diff --cached --stat
 git diff --cached --name-only
 ```
 
-Confira que não há `game/`, `firmware/`, `gamedata/`, `src/recomp/`, `spu/`, `analysis/` ou `build*/` na lista. Então faça o commit e configure a URL do seu repositório:
+Check that the list contains no `game/`, `firmware/`, `gamedata/`, `src/recomp/`, `spu/`, `analysis/`, or `build*/` paths. Then commit and configure your repository URL:
 
 ```bash
 git commit -m "Prepare experimental source release"
-git remote add origin https://github.com/SEU_USUARIO/kamenriderbattridewarsport.git
+git remote add origin https://github.com/YOUR_USERNAME/kamenriderbattridewarsport.git
 git push -u origin main
 ```
 
-Substitua `SEU_USUARIO`. Se já houver Git/remote/commits, confira o estado existente e adapte os comandos; não reinicialize nem substitua o histórico. O preparo local não executa commit, cria repositório remoto ou faz push.
+Replace `YOUR_USERNAME`. If Git, remotes, or commits already exist, inspect the current state and adapt the commands; do not reinitialize or replace history. Local preparation does not commit, create a remote repository, or push automatically.
 
-Descrição sugerida:
+Suggested description:
 
-> Port experimental de Kamen Rider: Battride War (BLJS10220) com PS3Recomp e Vulkan. Início da missão validado com movimento, pausa e ataques; desempenho baixo e falhas visuais. Requer dados locais do jogo e geração de PPU/SPU. Sem jogo, firmware, chaves ou saves incluídos.
+> Experimental Kamen Rider: Battride War (BLJS10220) port using PS3Recomp and Vulkan. The start of the mission has been validated with movement, pause, and attacks; performance is low and visual glitches remain. Requires local game data and PPU/SPU generation. No game, firmware, keys, or saves included.
 
-Não anuncie como jogo completo ou port estável. A documentação descreve exatamente o trecho validado. Licenças e créditos estão em `LICENSE` e `THIRD_PARTY_NOTICES.md`.
+Do not advertise this as a complete game or stable port. The documentation describes exactly the section validated. Licenses and credits are in `LICENSE` and `THIRD_PARTY_NOTICES.md`.

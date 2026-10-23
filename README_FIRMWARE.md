@@ -1,24 +1,24 @@
-# Firmware de áudio local
+# Local audio firmware
 
-O código publicado não inclui firmware, codecs ou chaves. Obtenha os arquivos localmente a partir do seu próprio firmware/dados de console e mantenha-os fora do Git.
+The published code does not include firmware, codecs, or keys. Obtain these files locally from your own firmware/console data and keep them out of Git.
 
-O lançador procura:
+The launcher looks for:
 
 ```text
 firmware/dev_flash/sys/external/flashMP3.pic
 firmware/dev_flash/sys/external/flashATRAC.pic
 ```
 
-Também é possível usar uma instalação externa sem copiar arquivos para o port:
+You can also use an external installation without copying files into the port:
 
 ```bash
-PS3_DEV_FLASH=/caminho/dev_flash ./run-vulkan.sh
+PS3_DEV_FLASH=/path/to/dev_flash ./run-vulkan.sh
 ```
 
-`PS3_DEV_FLASH` deve apontar para a raiz de `dev_flash`, que contém `sys/external/`. A variável explícita tem prioridade sobre o padrão local.
+`PS3_DEV_FLASH` must point to the `dev_flash` root containing `sys/external/`. The explicit variable takes precedence over the local default.
 
-No desenvolvimento em Fedora, os codecs foram extraídos do firmware contido no disco do usuário usando uma configuração isolada do RPCS3. Sem eles, a tarefa SPU de áudio parava ao entrar no código ausente, deixando o PPU aguardando um EventFlag. Com os arquivos presentes, o jogo abriu o codec MP3 e a tarefa permaneceu ativa no teste do menu, sem fabricar sinais de conclusão.
+During development on Fedora, the codecs were extracted from firmware on the user's disc using an isolated RPCS3 configuration. Without them, the audio SPU task stopped upon entering missing code, leaving the PPU waiting for an EventFlag. With the files present, the game opened the MP3 codec and the task remained active during the menu test, without fabricating completion signals.
 
-Os codecs não são necessários para compilar o código do host. São dados necessários em tempo de execução para esses caminhos de áudio; sua ausência pode afetar áudio e progresso do jogo. A abertura PAMF usa um decoder ATRAC3plus separado, fornecido pelo SDK. O áudio ainda apresenta interrupções e não está validado como contínuo.
+The codecs are not required to compile the host code. They are runtime data required for these audio paths; their absence may affect audio and game progression. The PAMF opening uses a separate ATRAC3plus decoder supplied by the SDK. Audio still has interruptions and has not been validated as continuous.
 
-`firmware/`, `*.pic` e `*.pup` estão ignorados. Não os adicione com `git add -f` nem os anexe a uma release do port.
+`firmware/`, `*.pic`, and `*.pup` are ignored. Do not add them with `git add -f` or attach them to a port release.

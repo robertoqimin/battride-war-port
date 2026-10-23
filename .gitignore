@@ -1,4 +1,4 @@
-# Dados locais do jogo, firmware e saves: nunca publicar.
+# Local game data, firmware, and saves: never publish.
 /game/
 /firmware/
 /gamedata/
@@ -20,13 +20,13 @@
 *.rap
 *.rif
 
-# Fontes e metadados gerados a partir do jogo.
+# Sources and metadata generated from the game.
 /src/recomp/
 /spu/
 /analysis/
 /.generate-*/
 
-# Compilações, ambientes, arquivos de diagnóstico e segredos locais.
+# Builds, environments, diagnostic files, and local secrets.
 /build*/
 /.venv/
 __pycache__/
