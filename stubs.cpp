@@ -360,9 +360,74 @@ static void port_pad_get_data(ppu_context* c)
     c->gpr[3] = (uint64_t)(int64_t)rc;
 }
 
+/* PORT_PROFILE=<file>: CPU-time sampling profiler that does not stop the
+ * game (a debugger attach pauses every thread). A process CPU-time timer
+ * raises SIGPROF about PORT_PROFILE_HZ times a second (default 1000); the
+ * thread that was running records its id and instruction pointer, and a
+ * helper thread appends "<tid> <hex rip>" lines to the file every second.
+ * Symbolise with nm/addr2line against the (non-PIE) executable. */
+#include <csignal>
+#include <ctime>
+#include <thread>
+#include <ucontext.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+namespace {
+struct ProfSample { uint32_t tid; uint64_t rip; };
+constexpr uint32_t kProfRing = 1u << 20;
+ProfSample* s_prof_ring;
+std::atomic<uint32_t> s_prof_head{0};
+void port_prof_signal(int, siginfo_t*, void* uc_)
+{
+    const ucontext_t* uc = static_cast<const ucontext_t*>(uc_);
+    const uint32_t i = s_prof_head.fetch_add(1, std::memory_order_relaxed);
+    ProfSample& s = s_prof_ring[i & (kProfRing - 1)];
+    s.tid = (uint32_t)syscall(SYS_gettid);
+    s.rip = (uint64_t)uc->uc_mcontext.gregs[REG_RIP];
+}
+}
+extern "C" void port_profiler_start(void)
+{
+    const char* path = std::getenv("PORT_PROFILE");
+    if (!path || !*path) return;
+    s_prof_ring = new ProfSample[kProfRing]();
+    struct sigaction sa = {};
+    sa.sa_sigaction = port_prof_signal;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGPROF, &sa, nullptr);
+    const char* hz_s = std::getenv("PORT_PROFILE_HZ");
+    long hz = hz_s ? std::atol(hz_s) : 1000; if (hz < 10) hz = 10;
+    timer_t t;
+    struct sigevent ev = {};
+    ev.sigev_notify = SIGEV_SIGNAL; ev.sigev_signo = SIGPROF;
+    if (timer_create(CLOCK_PROCESS_CPUTIME_ID, &ev, &t) != 0) { std::perror("[port-profile] timer_create"); return; }
+    struct itimerspec its = {};
+    its.it_interval.tv_nsec = 1000000000L / hz; its.it_value = its.it_interval;
+    timer_settime(t, 0, &its, nullptr);
+    std::string out = path;
+    std::thread([out] {
+        uint32_t tail = 0;
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            const uint32_t head = s_prof_head.load(std::memory_order_relaxed);
+            if (head - tail > kProfRing) tail = head - kProfRing;
+            if (FILE* f = std::fopen(out.c_str(), "a")) {
+                for (; tail != head; tail++) {
+                    const ProfSample& s = s_prof_ring[tail & (kProfRing - 1)];
+                    std::fprintf(f, "%u %lx\n", s.tid, (unsigned long)s.rip);
+                }
+                std::fclose(f);
+            }
+        }
+    }).detach();
+    std::fprintf(stderr, "[port-profile] sampling at %ld Hz of process CPU time -> %s\n", hz, path);
+}
+
 extern "C" void port_register_sail(void);
 extern "C" void port_register_hle(void)
 {
+    port_profiler_start();
     if (std::getenv("PORT_PAD_STICK_FILE"))
         ps3_hle_register_ctx(0x8B72CDA1u, "cellPadGetData", port_pad_get_data);
     port_register_sail();

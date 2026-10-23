@@ -220,6 +220,8 @@ typedef struct vk_state {
     int              present_inflight;/* copy submitted, not yet finished      */
     int              present_split;   /* inside rsx_vulkan_backend_present_begin */
     int              present_order;   /* the walker's next command buffer waits */
+    int              present_readback;/* the in-flight present copies to readback */
+    int              present_shown;   /* ...and already blitted + queued to the window */
     pthread_mutex_t  queue_mu;
     pthread_mutex_t  present_mu;
 
@@ -2090,6 +2092,60 @@ static void vk_dump_ppm(const unsigned char* rgba)
 /* Wait until the GPU is done with a present's copy. Safe from any thread:
  * present_fence is reset only when a present starts, which never runs
  * alongside the walker. */
+/* Record the blit of the frame into the next swapchain image on cb, which
+ * the caller submits waiting on sem_acquire and signalling sc_done[*idx];
+ * then vk_window_queue presents it. The window path no longer has a submit
+ * and a CPU wait of its own: the copy, the blit and the present all run on
+ * the GPU behind the frame's batch. Returns 0 when no image was acquired. */
+static int vk_window_record(VkCommandBuffer cb, u32* idx)
+{
+    if (!s_vk.windowed || !s_vk.swapchain) return 0;
+    VkResult r = pvkAcquireNextImageKHR(s_vk.device, s_vk.swapchain, UINT64_MAX,
+                                        s_vk.sem_acquire, VK_NULL_HANDLE, idx);
+    if (r == VK_ERROR_OUT_OF_DATE_KHR) { vk_swapchain_lost(); return 0; }
+    if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
+        VK_LOG("vkAcquireNextImageKHR failed (VkResult %d)\n", (int)r); return 0;
+    }
+    VkImageMemoryBarrier b = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = 0, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = s_vk.sc_images[*idx], .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
+    };
+    pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          0, 0, NULL, 0, NULL, 1, &b);
+    VkImageBlit blit = {
+        .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .srcOffsets = { { 0, 0, 0 }, { (int32_t)s_vk.width, (int32_t)s_vk.height, 1 } },
+        .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .dstOffsets = { { 0, 0, 0 },
+                        { (int32_t)s_vk.sc_extent.width, (int32_t)s_vk.sc_extent.height, 1 } },
+    };
+    pvkCmdBlitImage(cb, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,
+                    s_vk.sc_images[*idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &blit, VK_FILTER_LINEAR);
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = 0;
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                          0, 0, NULL, 0, NULL, 1, &b);
+    return 1;
+}
+
+static void vk_window_queue(u32 idx)
+{
+    VkPresentInfoKHR pi = {
+        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .waitSemaphoreCount = 1, .pWaitSemaphores = &s_vk.sc_done[idx],
+        .swapchainCount = 1, .pSwapchains = &s_vk.swapchain, .pImageIndices = &idx,
+    };
+    VkResult r = vk_queue_present(&pi);
+    if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) vk_swapchain_lost();
+    else if (r != VK_SUCCESS) VK_LOG("vkQueuePresentKHR failed (VkResult %d)\n", (int)r);
+}
+
 static void vk_present_wait_gpu(void)
 {
     if (__atomic_load_n(&s_vk.present_inflight, __ATOMIC_ACQUIRE) && s_vk.present_fence)
@@ -2103,13 +2159,15 @@ static void vk_present_complete_locked(void)
     pvkWaitForFences(s_vk.device, 1, &s_vk.present_fence, VK_TRUE, UINT64_MAX);
     __atomic_store_n(&s_vk.present_inflight, 0, __ATOMIC_RELEASE);
 
-    vk_invalidate(&s_vk.readback);
-    const unsigned char* px = (const unsigned char*)s_vk.readback.ptr;
-    size_t c = ((size_t)(s_vk.height / 2) * s_vk.width + s_vk.width / 2) * 4;
-    s_vk.last_center = ((u32)px[c] << 16) | ((u32)px[c + 1] << 8) | (u32)px[c + 2];
     s_vk.presented++;
-    if (s_vk.dump_path && (s_vk.presented % s_vk.dump_every) == 0) vk_dump_ppm(px);
-    vk_present_window();
+    if (s_vk.present_readback) {
+        vk_invalidate(&s_vk.readback);
+        const unsigned char* px = (const unsigned char*)s_vk.readback.ptr;
+        size_t c = ((size_t)(s_vk.height / 2) * s_vk.width + s_vk.width / 2) * 4;
+        s_vk.last_center = ((u32)px[c] << 16) | ((u32)px[c + 1] << 8) | (u32)px[c + 2];
+        if (s_vk.dump_path && (s_vk.presented % s_vk.dump_every) == 0) vk_dump_ppm(px);
+    }
+    if (!s_vk.present_shown) vk_present_window();
 }
 
 /* present_mu held: a previous present finished, the present's command
@@ -2131,6 +2189,12 @@ static VkCommandBuffer vk_present_record_begin(void)
 static void vk_present_record_end(VkCommandBuffer cb)
 {
     vk_barrier_image_on(cb, s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
+    /* The host copy of the frame feeds the PPM dumps and the headless
+     * readback checks; a windowed run without dumps skips it. */
+    s_vk.present_readback = !s_vk.windowed || s_vk.dump_path != NULL;
+    u32 sc_idx = 0;
+    s_vk.present_shown = vk_window_record(cb, &sc_idx);
+    if (s_vk.present_readback) {
     VkBufferImageCopy region = {
         .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
         .imageExtent = { s_vk.width, s_vk.height, 1 },
@@ -2145,13 +2209,20 @@ static void vk_present_record_end(VkCommandBuffer cb)
     };
     pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
                           0, 0, NULL, 1, &host, 0, NULL);
+    }
     if (pvkEndCommandBuffer(cb) != VK_SUCCESS) { VK_LOG("vkEndCommandBuffer (present) failed\n"); return; }
+    VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSubmitInfo si = { .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
                         .commandBufferCount = 1, .pCommandBuffers = &cb };
+    if (s_vk.present_shown) {
+        si.waitSemaphoreCount = 1; si.pWaitSemaphores = &s_vk.sem_acquire; si.pWaitDstStageMask = &wait_stage;
+        si.signalSemaphoreCount = 1; si.pSignalSemaphores = &s_vk.sc_done[sc_idx];
+    }
     pvkResetFences(s_vk.device, 1, &s_vk.present_fence);
     if (vk_queue_submit(&si, s_vk.present_fence) != VK_SUCCESS) {
         VK_LOG("vkQueueSubmit (present) failed\n"); return;
     }
+    if (s_vk.present_shown) vk_window_queue(sc_idx);
     __atomic_store_n(&s_vk.present_inflight, 1, __ATOMIC_RELEASE);
     s_vk.present_order = 1;
     if (!(s_vk.present_split && s_vk.eng_active)) vk_present_complete_locked();
@@ -2380,6 +2451,8 @@ static int vk_eng_upload_region(VkImage img, u32 layer, u32 mip, u32 x, u32 y,
             .imageExtent = { w, h, 1 },
         };
         pvkCmdCopyBufferToImage(s_vk.cmd, s_batch.buf.buf, img, VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+        /* Visible to the draws recorded after it (they sample it). */
+        vk_barrier_image(img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
         return vk_end_op();
     }
     vk_buffer st = {0};

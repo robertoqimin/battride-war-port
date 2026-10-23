@@ -1039,7 +1039,7 @@ static int eng_staging_reserve(u32 bytes)
 /* Decode a guest texture out of guest memory and hand every face and level to
  * the backend. Returns the backend handle, or 0. */
 static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
-                              u32 levels, u32 pitch, int cube, u32 remap, u32 depth)
+                              u32 levels, u32 pitch, int cube, u32 remap, u32 depth, u32 into)
 {
     rsx_tex_level lv[RSX_MAX_TEXTURE_LEVELS];
     const u32 nlv = rsx_texture_mip_chain(fmt, w, h, levels, pitch, lv);
@@ -1047,6 +1047,7 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
     /* A volume: every slice of every level decoded and uploaded on its own.
      * inFAMOUS 2's occlusion volumes read an 8x8x8 cone LUT; uploaded as its
      * first slice and sampled in 2D it darkened whole boxes round every prop. */
+    if (depth > 1) into = 0;              /* volumes are always rebuilt */
     if (depth > 1 && !cube && g.be->texture_create_3d && g.be->texture_upload_3d &&
         !lv[0].tl.compressed && lv[0].tl.bytes_per_texel) {
         const u32 span = eng_texture_span_3d(fmt, w, h, depth, levels, pitch);
@@ -1091,8 +1092,12 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
     const u8* src = eng_guest_ptr(NULL, location, offset, span);
     if (!src) return 0;
 
-    const u32 handle = g.be->texture_create(g.be->user, eng_texfmt(lv[0].tl.fmt),
-                                            w, h, nlv, faces, remap, fmt);
+    /* `into`: refill an existing texture of this exact shape instead of
+     * creating one. The backend orders the copy after every draw recorded
+     * before it, so draws already queued keep sampling the old contents. */
+    const u32 handle = into ? into
+                            : g.be->texture_create(g.be->user, eng_texfmt(lv[0].tl.fmt),
+                                                   w, h, nlv, faces, remap, fmt);
     if (!handle) return 0;
 
     for (u32 f = 0; f < faces; f++) {
@@ -1100,7 +1105,7 @@ static u32 eng_texture_upload(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
         for (u32 m = 0; m < nlv; m++) {
             const rsx_tex_layout* tl = &lv[m].tl;
             if (!eng_staging_reserve(tl->dst_row_bytes * tl->rows)) {
-                g.be->texture_release(g.be->user, handle);
+                if (!into) g.be->texture_release(g.be->user, handle);
                 return 0;
             }
             rsx_texture_decode(g.tex_staging, tl->dst_row_bytes,
@@ -1154,10 +1159,16 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
             if (readable) e->sparse_hash = sparse;
             e->last_hash_frame = g.frames;
             if (readable && hash != e->content_hash) {
+                /* Same address, format and size: refill the texture in place.
+                 * Vertex textures (skinning data) change every frame for every
+                 * character, and creating a new one each time cost a driver
+                 * memory allocation per change -- with a crowd on screen, a
+                 * large share of the frame. */
                 const u32 fresh = eng_texture_upload(location, offset, fmt, w, h,
-                                                     levels, pitch, cube, remap, depth);
+                                                     levels, pitch, cube, remap, depth,
+                                                     depth > 1 ? 0u : e->handle);
                 if (fresh) {
-                    g.be->texture_release(g.be->user, e->handle);
+                    if (fresh != e->handle) g.be->texture_release(g.be->user, e->handle);
                     e->handle = fresh;
                     e->content_hash = hash;
                 }
@@ -1191,7 +1202,7 @@ static u32 eng_texture_slot(u32 location, u32 offset, u32 fmt, u32 w, u32 h,
       e.content_hash = eng_texture_content_hash(location, offset, span, &readable);
       e.sparse_hash = eng_texture_sparse_hash(location, offset, span, &readable); }
     e.handle = eng_texture_upload(location, offset, fmt, w, h, levels, pitch,
-                                  cube, remap, depth);
+                                  cube, remap, depth, 0);
     if (e.handle && evicted) g.be->texture_release(g.be->user, evicted);
     if (e.handle || !evicted) g.textures[index] = e;
     return e.handle;

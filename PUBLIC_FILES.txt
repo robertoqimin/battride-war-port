@@ -10,9 +10,11 @@ THIRD_PARTY_NOTICES.md
 audio_bridge.c
 config.toml
 docs/BUILD.md
+docs/ISSUES.md
 docs/PUBLISHING.md
 fs_bridge.cpp
 gcm_bridge.c
+include/ppu_vmx.h
 loader_bridge.cpp
 main.cpp
 patches/graphics-command-buffer-init.patch
@@ -27,6 +29,7 @@ scripts/generate.py
 scripts/lift_audio_spu.py
 spu_bridge.c
 spu_channels_bridge.c
+spu_coherency_bridge.c
 spu_interp_bridge.c
 stubs.cpp
 tests/test_fs_offset.cpp
@@ -41,4 +44,6 @@ tests/test_sail.cpp
 tests/test_sail.sh
 tests/test_sail_audio.cpp
 tests/test_sail_audio.sh
+tests/test_vmx_simd.cpp
+tests/test_vmx_simd.sh
 vulkan_bridge.c

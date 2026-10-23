@@ -199,12 +199,21 @@ static void present_guest_frame(void)
     InterlockedIncrement(&g_frames_presented);
 }
 
+/* Set once the frame clock has created the window (or failed to). The guest
+ * must not start before then: its first cellPadInit initialises SDL's
+ * controller subsystem on the main thread while window creation dispatches
+ * SDL events on the frame clock's, and the two take SDL's joystick and
+ * event-watch locks in opposite orders -- a startup deadlock, seen with
+ * MangoHud's timing but possible on any run. */
+static HANDLE g_backend_ready;
+
 static DWORD WINAPI frame_clock(LPVOID)
 {
     const char* title = getenv("PS3_TITLE");
     if (!title || !*title) title = "ps3recomp";
 
     int rsx_ok = (rsx_backend_init(WINDOW_WIDTH, WINDOW_HEIGHT, title) == 0);
+    SetEvent(g_backend_ready);
     fprintf(stderr, "[rsx] %s backend init %s\n", RSX_BACKEND_NAME,
             rsx_ok ? "OK -- window open" : "FAILED");
 
@@ -404,7 +413,9 @@ int main(int argc, char** argv)
     /* Install the guest-callback hook, then start the frame clock. It no-ops
      * until the title registers its vblank and flip handlers during init. */
     g_ps3_guest_caller = harness_guest_caller;
+    g_backend_ready = CreateEventA(NULL, TRUE, FALSE, NULL);
     CreateThread(NULL, 4u * 1024 * 1024, frame_clock, NULL, 0, NULL);
+    WaitForSingleObject(g_backend_ready, INFINITE);
 
     printf("\n[boot] dispatching entry OPD 0x%08X (stack top 0x%08X)\n\n",
            entry, STACK_TOP);

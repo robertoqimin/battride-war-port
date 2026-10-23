@@ -10,7 +10,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 PRIVATE = {'game', 'firmware', 'gamedata', 'analysis', 'build', 'build-vulkan',
            'spu', 'src', '.git', '.venv'}
-EXTENSIONS = {'.c', '.cpp', '.hpp', '.md', '.txt', '.toml', '.json', '.sh', '.py', '.patch'}
+EXTENSIONS = {'.c', '.cpp', '.h', '.hpp', '.md', '.txt', '.toml', '.json', '.sh', '.py', '.patch'}
 SPECIAL = {'.gitignore', 'LICENSE'}
 
 def public_files():

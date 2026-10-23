@@ -1470,11 +1470,24 @@ static PPU_THREAD_LOCAL int      g_dispatch_depth = 0;
 extern "C" int* ps3_ppu_dispatch_depth_slot(void) { return &g_dispatch_depth; }
 extern "C" int* ps3_ppu_vcall_sp_slot(void) { return &g_vcall_sp; }
 
+/* spu_coh_is_reserved without the call: the bitmap and its armed flag from
+ * spu_coherency_bridge.c, read in place. */
+extern "C" const unsigned char* port_spu_coh_bitmap(void);
+extern "C" const int* port_spu_coh_armed(void);
+static const unsigned char* s_coh_bits = port_spu_coh_bitmap();
+static const int* s_coh_on = port_spu_coh_armed();
+static inline int vm_coh_reserved(uint32_t a)
+{
+    if (__builtin_expect(!__atomic_load_n(s_coh_on, __ATOMIC_RELAXED), 1)) return 0;
+    const uint32_t line = a >> 7;                    /* SPU_COH_LINE_SHIFT */
+    return (__atomic_load_n(&s_coh_bits[line >> 3], __ATOMIC_RELAXED) >> (line & 7)) & 1u;
+}
+
 /* Every guest store commits through this: on a line no SPU has reserved (all of
  * them, until SPU code runs) it is the plain memcpy it replaced. */
 #define VM_WRITE_COH(a, src, n)                                               \
     do {                                                                      \
-        if (spu_coh_is_reserved((uint32_t)(a))) {                             \
+        if (vm_coh_reserved((uint32_t)(a))) {                                 \
             spu_lockline_lock();                                              \
             memcpy(vm_base + (uint32_t)(a), (src), (n));                      \
             spu_coh_notify_write((uint32_t)(a));                              \

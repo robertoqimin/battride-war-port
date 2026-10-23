@@ -67,6 +67,25 @@ list(LENGTH RECOMP_SOURCES RECOMP_SOURCE_COUNT)
 message(STATUS "Lifted sources:  ${RECOMP_SOURCE_COUNT} file(s)")
 
 # ---------------------------------------------------------------------------
+# Target CPU
+# ---------------------------------------------------------------------------
+# The translated PPU and SPU code is mostly scalar loops over vector lanes and
+# fused multiply-adds (fmaf). Built for baseline x86-64, every fused
+# multiply-add is a libm call and nothing vectorises; in crowded combat the
+# game's render thread and the audio SPU thread then ran out of time (about
+# 20 fps, a quarter of the audio blocks late). PORT_MARCH=native builds for the
+# CPU of the machine running the build -- what a port built from source on
+# that machine wants. Set it to a level such as x86-64-v3, or empty for the
+# compiler default, to build a binary for other machines.
+set(PORT_MARCH "native" CACHE STRING "Value for -march= (empty: compiler default)")
+if(PORT_MARCH AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+    # No implicit contraction: a separate guest multiply and add must stay two
+    # roundings, as on the PPU/SPU. Explicit fmaf() becomes one instruction.
+    add_compile_options("-march=${PORT_MARCH}" "-ffp-contract=off")
+    message(STATUS "Target CPU:      -march=${PORT_MARCH}")
+endif()
+
+# ---------------------------------------------------------------------------
 # ps3recomp runtime library
 # ---------------------------------------------------------------------------
 # Built from source as a subdirectory rather than imported as a prebuilt
@@ -112,6 +131,15 @@ set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${PORT_SPU_SOURCES}")
 target_sources(ps3recomp_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/spu_interp_bridge.c")
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/spu_interp_bridge.c" TARGET_DIRECTORY ps3recomp_runtime
     PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
+
+# The SDK's SPU reservation tracking, with its bitmap readable in place.
+get_target_property(PORT_SPU_COH_SOURCES ps3recomp_runtime SOURCES)
+list(FILTER PORT_SPU_COH_SOURCES EXCLUDE REGEX "runtime/spu/spu_coherency\\.c$")
+set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${PORT_SPU_COH_SOURCES}")
+target_sources(ps3recomp_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/spu_coherency_bridge.c")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/spu_coherency_bridge.c" TARGET_DIRECTORY ps3recomp_runtime
+    PROPERTIES COMPILE_DEFINITIONS "PORT_SPU_COHERENCY_SOURCE=\"${PS3RECOMP_DIR}/runtime/spu/spu_coherency.c\""
+               INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
 
 # The SDK's channel/MFC layer with cached environment lookups.
 get_target_property(PORT_SPU_CH_SOURCES ps3recomp_runtime SOURCES)
@@ -275,6 +303,10 @@ endif()
 if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app.rc")
     target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/app.rc")
 endif()
+
+# Port-local overrides of SDK headers the lifted code includes (ppu_vmx.h:
+# SIMD float ops). Searched before the SDK's own copies.
+target_include_directories(${PROJECT_NAME} BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     "${RECOMP_DIR}"                            # the generated ppu_recomp.h
