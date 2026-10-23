@@ -334,9 +334,37 @@ extern "C" void port_register_hle_early(void)
     std::fprintf(stderr, "[port] blocking sys_lwcond installed\n");
 }
 
+/* PORT_PAD_STICK_FILE=<path>: test automation for the left analog stick,
+ * which this title moves the player with (the d-pad does nothing in play).
+ * The SDK can only hold a stick fixed from launch (PAD_STICK); this rereads
+ * "<lx> <ly>" (0-255, 128 centre) from the file on every read the title makes
+ * and writes it into the reported data, so a driver outside the process can
+ * steer; "<lx> <ly> <rx> <ry>" also sets the right stick (the camera). Off
+ * unless the variable is set; only affects reports with sticks. */
+extern "C" int32_t cellPadGetData(uint32_t, void*);
+static void port_pad_get_data(ppu_context* c)
+{
+    const uint32_t port = (uint32_t)c->gpr[3], ea = (uint32_t)c->gpr[4];
+    const int32_t rc = cellPadGetData(port, (void*)(uintptr_t)ea);
+    static const char* path = std::getenv("PORT_PAD_STICK_FILE");
+    if (rc == 0 && path && port == 0 && ea && (int32_t)vm_read32(ea) >= 8) {
+        if (FILE* f = std::fopen(path, "rb")) {
+            int v[4] = {128, 128, 128, 128};   /* lx ly, then optionally rx ry */
+            const int n = std::fscanf(f, "%d %d %d %d", &v[0], &v[1], &v[2], &v[3]);
+            static const int slot[4] = {6, 7, 4, 5};
+            for (int i = 0; i < (n >= 4 ? 4 : n >= 2 ? 2 : 0); i++)
+                vm_write16(ea + 4 + slot[i] * 2, (uint16_t)(v[i] < 0 ? 0 : v[i] > 255 ? 255 : v[i]));
+            std::fclose(f);
+        }
+    }
+    c->gpr[3] = (uint64_t)(int64_t)rc;
+}
+
 extern "C" void port_register_sail(void);
 extern "C" void port_register_hle(void)
 {
+    if (std::getenv("PORT_PAD_STICK_FILE"))
+        ps3_hle_register_ctx(0x8B72CDA1u, "cellPadGetData", port_pad_get_data);
     port_register_sail();
     ps3_hle_register_ctx(0xE7FA820Bu,"cellSaveDataEnableOverlay",port_save_overlay_set);
     ps3_hle_register_ctx(0x4DD03A4Eu,"cellSaveDataListAutoSave",port_save_list_auto);
