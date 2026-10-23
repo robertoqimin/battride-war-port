@@ -1,0 +1,27 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "linux-vulkan",
+      "displayName": "Linux Vulkan + SPU",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-vulkan",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_FLAGS_DEBUG": "-O0",
+        "CMAKE_CXX_FLAGS_DEBUG": "-O0",
+        "PORT_ENABLE_SPU": "ON",
+        "PS3RECOMP_RSX_VULKAN": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "linux-vulkan",
+      "configurePreset": "linux-vulkan",
+      "jobs": 4
+    }
+  ]
+}

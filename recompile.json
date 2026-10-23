@@ -1,0 +1,10 @@
+{
+  "title_id": "BLJS10220",
+  "sdk_repository": "https://github.com/sp00nznet/ps3recomp.git",
+  "sdk_commit": "a6d76c895f77eb30b90a806c830544e61821b77f",
+  "eboot_sha256": "a53b7bca5d47490710ba02af5f885e1219d10c7a1a456fcf6e13a48db668a014",
+  "ppu_chunks": 84,
+  "registered_spu_sha256": [
+    "615f01318fb1c02fbb03cd0fdca61b2144aaed4846bb2fc12fe4ca8fe2dc0657"
+  ]
+}
