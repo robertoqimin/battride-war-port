@@ -22,16 +22,25 @@ def main():
     args = ap.parse_args()
     spec = json.loads((ROOT / 'recompile.json').read_text())
     sdk = args.sdk.resolve()
-    rev = subprocess.check_output(['git', '-C', str(sdk), 'rev-parse', 'HEAD'], text=True).strip()
-    if rev != spec['sdk_commit']:
-        ap.error('SDK commit differs from recompile.json; use the pinned checkout')
-    if subprocess.run(['git', '-C', str(sdk), 'diff', '--quiet', 'HEAD', '--', 'tools']).returncode:
-        ap.error('SDK tools have local modifications; use unmodified pinned tools')
+    stamp = sdk / '.ps3recomp-commit'
+    if not (sdk / '.git').exists() and stamp.is_file():
+        # A `git archive` export of the pinned commit, as the AppImage ships.
+        if stamp.read_text().strip() != spec['sdk_commit']:
+            ap.error('SDK export differs from recompile.json; use the pinned commit')
+    else:
+        rev = subprocess.check_output(['git', '-C', str(sdk), 'rev-parse', 'HEAD'], text=True).strip()
+        if rev != spec['sdk_commit']:
+            ap.error('SDK commit differs from recompile.json; use the pinned checkout')
+        if subprocess.run(['git', '-C', str(sdk), 'diff', '--quiet', 'HEAD', '--', 'tools']).returncode:
+            ap.error('SDK tools have local modifications; use unmodified pinned tools')
     elf = ROOT / 'game/EBOOT.ELF'
     if not elf.is_file() or elf.is_symlink():
         ap.error('place the matching decrypted file at game/EBOOT.ELF (regular file)')
     with elf.open('rb') as stream:
-        digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+        value = hashlib.sha256()
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            value.update(block)
+        digest = value.hexdigest()
     if digest != spec['eboot_sha256']:
         ap.error('EBOOT SHA-256 mismatch: this port is specific to the documented BLJS10220 build')
     if args.jobs < 1:

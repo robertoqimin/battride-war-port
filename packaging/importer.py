@@ -41,6 +41,35 @@ def symbol_version(path, prefix):
                 for m in re.findall(re.escape(prefix) + rb'(\d+(?:\.\d+)*)\x00', data)), default=())
 
 
+# Bump when the local build recipe changes, so existing runners are rebuilt.
+BUILD_RECIPE = 1
+# Peak memory of one compiler job on the largest generated PPU chunk, rounded up.
+BUILD_JOB_MEMORY = 2 * 1024**3
+
+
+def cpu_identity():
+    """The runner is built with -march=native: rebuild it if the data folder moves to another CPU."""
+    model, flags = '', ''
+    try:
+        for line in Path('/proc/cpuinfo').read_text().splitlines():
+            if line.startswith('model name') and not model:
+                model = line.split(':', 1)[1].strip()
+            elif line.startswith('flags') and not flags:
+                flags = ' '.join(sorted(line.split(':', 1)[1].split()))
+    except OSError:
+        pass
+    return {'model': model, 'flags_sha256': hashlib.sha256(flags.encode()).hexdigest()}
+
+
+def build_jobs():
+    cpus = len(os.sched_getaffinity(0))
+    try:
+        available = int(re.search(r'MemAvailable:\s+(\d+) kB', Path('/proc/meminfo').read_text())[1]) * 1024
+    except (OSError, TypeError, ValueError):
+        available = 4 * 1024**3
+    return max(1, min(cpus, (available - 1024**3) // BUILD_JOB_MEMORY))
+
+
 def safe_name(name):
     p = PurePosixPath(name)
     if not name or p.is_absolute() or '..' in p.parts or '\\' in name or '\n' in name or '\r' in name:
@@ -85,18 +114,28 @@ class Runner:
             except ProcessLookupError:
                 pass
 
-    def run(self, args, env=None, cwd=None, log=None, capture=False):
+    def run(self, args, env=None, cwd=None, log=None, capture=False, on_line=None):
+        """Run a tool in its own session; on_line receives each output line (also logged)."""
         if self.cancelled.is_set():
             raise ImportError('Operation cancelled')
         p = subprocess.Popen([str(x) for x in args], env=env, cwd=cwd,
-                             stdout=subprocess.PIPE if capture else (log or subprocess.DEVNULL),
+                             stdout=subprocess.PIPE if capture or on_line else (log or subprocess.DEVNULL),
                              stderr=subprocess.STDOUT, start_new_session=True)
         with self.lock:
             self.current = p
         if self.cancelled.is_set():
             self.stop()
         try:
-            output = p.communicate()[0] if capture else None
+            output = None
+            if on_line:
+                for raw in p.stdout:
+                    if log:
+                        log.write(raw)
+                    on_line(raw.decode('utf-8', errors='replace').rstrip())
+                if log:
+                    log.flush()
+            elif capture:
+                output = p.communicate()[0]
             code = p.wait()
         finally:
             with self.lock:
@@ -251,6 +290,107 @@ class Package:
             raise
         finally:
             shutil.rmtree(stage, ignore_errors=True)
+
+    def build_env(self, data):
+        """Environment for translating and compiling with the bundled toolchain only."""
+        env = os.environ.copy()
+        for key in list(env):
+            if key.startswith(('APPIMAGE', 'PYTHON', 'GI_', 'GTK_', 'GDK_', 'QT_', 'CMAKE_', 'PKG_CONFIG',
+                               'NINJA', 'CCACHE', 'DISTCC')) or key in (
+                    'APPDIR', 'LD_LIBRARY_PATH', 'LD_PRELOAD', 'LD_RUN_PATH', 'CC', 'CXX', 'CPP', 'CFLAGS',
+                    'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH',
+                    'LIBRARY_PATH', 'GCC_EXEC_PREFIX', 'COMPILER_PATH', 'MAKEFLAGS', 'PS3_DEV_FLASH'):
+                env.pop(key, None)
+        toolchain = self.root / 'usr/toolchain'
+        env['PATH'] = os.pathsep.join([str(toolchain / 'sysroot/usr/bin'), str(self.root / 'usr/bin'),
+                                       env.get('PATH', '/usr/bin:/bin')])
+        env['LD_LIBRARY_PATH'] = str(toolchain / 'runtime') + ':' + str(self.root / 'usr/lib')
+        env.update(PYTHONHOME=str(self.root / 'usr'), PYTHONPLATLIBDIR='lib', PYTHONDONTWRITEBYTECODE='1',
+                   LC_ALL='C.UTF-8', PS3_DEV_FLASH=str(Path(data) / 'firmware/dev_flash'))
+        return env
+
+    def build_identity(self):
+        return {'recipe': BUILD_RECIPE, 'package': self.meta['version'], 'sdk': self.meta['sdk_commit'],
+                'elf_sha256': self.meta['elf_sha256'], 'cpu': cpu_identity()}
+
+    def built_runner(self, data):
+        """The game built on this computer, or None when it must be (re)built."""
+        out = Path(data) / 'runner'
+        try:
+            if json.loads((out / 'build.json').read_text()) == self.build_identity() and (out / 'game-runner').is_file():
+                return out / 'game-runner'
+        except (OSError, ValueError):
+            pass
+        return None
+
+    def build_runner(self, data, runner, status=lambda _: None, log=None):
+        """Translate the imported EBOOT and compile the game for this CPU.
+
+        Nothing from the game is shipped: the PPU/SPU sources are generated
+        from the user's own disc and compiled here with the bundled toolchain.
+        """
+        data = Path(data).resolve()
+        existing = self.built_runner(data)
+        if existing:
+            status('Using the game already built on this computer')
+            return existing
+        if shutil.disk_usage(data).free < 4 * 1024**3:
+            raise ImportError('Building the game needs about 4 GB of free space in the data folder.')
+        jobs = build_jobs()
+        python = self.root / 'usr/bin/python3'
+        sdk = self.root / 'usr/share/battride/ps3recomp'
+        env = self.build_env(data)
+        work = data / ('.build-' + uuid.uuid4().hex)
+        try:
+            port = work / 'port'
+            shutil.copytree(self.root / 'usr/share/battride/port', port)
+            (port / 'game').mkdir(exist_ok=True)
+            try:
+                os.link(data / 'game/EBOOT.ELF', port / 'game/EBOOT.ELF')
+            except OSError:
+                shutil.copy2(data / 'game/EBOOT.ELF', port / 'game/EBOOT.ELF')
+            status('Step 1 of 2: translating the game code from your EBOOT. This takes a few minutes...')
+            code, _ = runner.run([python, port / 'scripts/generate.py', '--sdk', sdk, '--jobs', jobs],
+                                 cwd=port, env=env, log=log, on_line=lambda _: None)
+            if code:
+                raise ImportError('Translating the game code failed. See build.log.')
+            build = work / 'build'
+            lines = []
+            code, _ = runner.run([self.root / 'usr/toolchain/sysroot/usr/bin/cmake', '-S', port, '-B', build,
+                                  '-G', 'Ninja', '-DCMAKE_TOOLCHAIN_FILE=' + str(self.root / 'usr/toolchain/toolchain.cmake'),
+                                  '-DCMAKE_BUILD_TYPE=Debug', '-DCMAKE_C_FLAGS_DEBUG=-O2', '-DCMAKE_CXX_FLAGS_DEBUG=-O2',
+                                  '-DPORT_ENABLE_SPU=ON', '-DPS3RECOMP_RSX_VULKAN=ON', '-DPORT_MARCH=native',
+                                  '-DPORT_PORTABLE=ON', '-DPS3RECOMP_DIR=' + str(sdk),
+                                  '-DPython3_EXECUTABLE=' + str(python),
+                                  '-Dglslang_DIR=' + str(port / 'packaging/glslang-compat')],
+                                 env=env, log=log, on_line=lines.append)
+            if code:
+                raise ImportError('Configuring the game build failed. See build.log.')
+            if not any('guest programs available' in line for line in lines):
+                raise ImportError('The bundled shader compiler was not found by the build. See build.log.')
+            progress = re.compile(r'^\[(\d+)/(\d+)\]')
+            shown = [0.0]
+            def compiled(line):
+                match = progress.match(line)
+                if match and time.monotonic() - shown[0] > 1:
+                    shown[0] = time.monotonic()
+                    status('Step 2 of 2: compiling the game for this CPU (%d jobs): %s / %s files'
+                           % (jobs, match[1], match[2]))
+            status('Step 2 of 2: compiling the game for this CPU (%d jobs). This takes 15-60 minutes...' % jobs)
+            code, _ = runner.run([self.root / 'usr/toolchain/sysroot/usr/bin/cmake', '--build', build, '-j', jobs],
+                                 env=env, log=log, on_line=compiled)
+            if code:
+                raise ImportError('Compiling the game failed. See build.log.')
+            out = data / 'runner'
+            out.mkdir(exist_ok=True)
+            tmp = out / 'game-runner.tmp'
+            shutil.copy2(build / 'kamenriderbattridewarsport', tmp)
+            tmp.replace(out / 'game-runner')
+            (out / 'build.json').write_text(json.dumps(self.build_identity(), indent=2))
+            status('Game built for this computer.')
+            return out / 'game-runner'
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
 
     def game_env(self, data, logs, mangohud=False):
         env = os.environ.copy()

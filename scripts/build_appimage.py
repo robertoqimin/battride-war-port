@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Build the portable AppImage inside the documented Ubuntu 22.04 build image."""
+"""Build the public AppImage inside the documented Ubuntu 22.04 build image.
+
+The AppImage carries no game code or data. It ships the port's public sources,
+the pinned ps3recomp SDK and a compiler toolchain; the launcher translates the
+player's own EBOOT and compiles the game on their computer."""
 import argparse
 import hashlib
 import json
@@ -10,6 +14,11 @@ import shutil
 import subprocess
 import sys
 import sysconfig
+import tarfile
+import io
+
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+import appimage_toolchain
 
 ap=argparse.ArgumentParser(description=__doc__)
 ap.add_argument('--sevenzip-dir',type=Path,required=True)
@@ -17,7 +26,7 @@ ap.add_argument('--runtime',type=Path,required=True)
 ap.add_argument('--rpcs3-dir',type=Path,required=True)
 ap.add_argument('--output',type=Path,required=True)
 ap.add_argument('--stage',type=Path,default=Path('build-appimage/portable/AppDir'))
-ap.add_argument('--runner',type=Path,default=Path('build-portable/kamenriderbattridewarsport'))
+ap.add_argument('--sdk',type=Path,help='ps3recomp git checkout (default: ../ps3recomp)')
 args=ap.parse_args()
 P=Path(__file__).resolve().parents[1];S=args.stage.resolve()
 if S.exists() or args.output.exists():raise SystemExit('Choose new stage and output paths; existing files are preserved.')
@@ -48,10 +57,19 @@ def host_library(name):
 
 for d in ('app','usr/bin','usr/lib','usr/share/glib-2.0/schemas'):(S/d).mkdir(parents=True,exist_ok=True)
 for n in ('importer.py','launcher.py'):copy(P/'packaging'/n,S/'app'/n)
-copy(args.runner,S/'usr/bin/game-runner')
-# Shader tools must be static/hidden; an unversioned SPIRV library can break RADV.
-needed=subprocess.check_output(['readelf','-d',str(args.runner)],text=True)
-if 'libSPIRV' in needed:raise SystemExit('Runner depends on shared SPIRV-Tools; rebuild with static libraries.')
+spec=json.loads((P/'recompile.json').read_text())
+# The port's public sources, exactly as the source export allowlist names them.
+public=[l.strip() for l in (P/'PUBLIC_FILES.txt').read_text().splitlines() if l.strip() and not l.startswith('#')]
+for n in public:
+    if not (P/n).is_file() or (P/n).is_symlink():raise SystemExit('Public file missing: '+n)
+    copy(P/n,S/'usr/share/battride/port'/n)
+# The pinned SDK commit itself, not the working tree: local changes never ship.
+sdk=(args.sdk or P.parent/'ps3recomp').resolve()
+archive=subprocess.run(['git','-C',str(sdk),'archive','--format=tar',spec['sdk_commit']],check=True,capture_output=True).stdout
+with tarfile.open(fileobj=io.BytesIO(archive)) as tar:tar.extractall(S/'usr/share/battride/ps3recomp')
+(S/'usr/share/battride/ps3recomp/.ps3recomp-commit').write_text(spec['sdk_commit']+'\n')
+print('Assembling the compiler toolchain...',flush=True)
+appimage_toolchain.assemble(S/'usr/toolchain')
 copy(sys.executable,S/'usr/bin/python3')
 version='%d.%d'%sys.version_info[:2]
 shutil.copytree(sysconfig.get_path('stdlib'),S/'usr/lib'/('python'+version),ignore=shutil.ignore_patterns('site-packages','dist-packages','__pycache__','test','tests','idlelib','ensurepip','venv'))
@@ -66,12 +84,14 @@ for p in list((S/'usr/rpcs3/usr/lib').glob('*')):
     if host_library(p.name) and (p.is_file() or p.is_symlink()):p.unlink()
 copy(args.sevenzip_dir/'7zz',S/'usr/bin/7z');copy(args.sevenzip_dir/'License.txt',S/'usr/share/licenses/7zip/License.txt')
 for n in ('ffmpeg','ffprobe'):copy('/usr/bin/'+n,S/'usr/bin'/n)
-subprocess.run(['cc','-O2','-march=x86-64-v3',str(P/'packaging/graphics_probe.c'),'-o',str(S/'usr/bin/graphics-probe'),*subprocess.check_output(['pkg-config','--cflags','--libs','sdl2','vulkan'],text=True).split()],check=True)
+subprocess.run(['cc','-O2','-march=x86-64','-msse4.1',str(P/'packaging/graphics_probe.c'),'-o',str(S/'usr/bin/graphics-probe'),*subprocess.check_output(['pkg-config','--cflags','--libs','sdl2','vulkan'],text=True).split()],check=True)
 seeds=[]
 libdir=Path('/usr/lib/x86_64-linux-gnu')
 for pattern in ('libgtk-3.so.0','libgdk-3.so.0','libgirepository-1.0.so.1','libpulse.so.0','libasound.so.2','libdecor-0.so.0'):
     seeds.extend(libdir.glob(pattern))
-queue=seeds+[p for p in S.rglob('*') if p.is_file() and not p.is_symlink()]
+# The toolchain resolves its own libraries (runtime/); the SDK holds a PPU test ELF.
+skip=(str(S/'usr/toolchain'),str(S/'usr/share/battride'))
+queue=seeds+[p for p in S.rglob('*') if p.is_file() and not p.is_symlink() and not str(p).startswith(skip)]
 seen=set();bom={};missing=set()
 while queue:
     p=queue.pop();real=p.resolve()
@@ -99,9 +119,12 @@ for p in sorted((P/'game/PS3_GAME').rglob('*')):
 p=P/'game/PS3_DISC.SFB'
 if p.exists():manifest['PS3_DISC.SFB']={'size':p.stat().st_size,'sha256':sha(p)}
 (S/'app/disc-manifest.json').write_text(json.dumps(manifest,separators=(',',':')))
-meta={'version':'0.2.0','glibc_min':'2.35','cpu':'x86-64-v3 / AVX2 FMA BMI2','elf_sha256':'a53b7bca5d47490710ba02af5f885e1219d10c7a1a456fcf6e13a48db668a014',
-      'codecs':{p.name:sha(p) for p in (P/'firmware/dev_flash/sys/external').glob('*.pic')},'runner_sha256':sha(args.runner),'sevenzip_sha256':sha(S/'usr/bin/7z'),'runtime_sha256':sha(args.runtime)}
+meta={'version':'0.3.0','glibc_min':'2.35','cpu':'built on the player computer, -march=native','elf_sha256':spec['eboot_sha256'],
+      'sdk_commit':spec['sdk_commit'],'codecs':{p.name:sha(p) for p in (P/'firmware/dev_flash/sys/external').glob('*.pic')},
+      'sevenzip_sha256':sha(S/'usr/bin/7z'),'runtime_sha256':sha(args.runtime)}
 (S/'app/package.json').write_text(json.dumps(meta,indent=2));(S/'app/library-sources.json').write_text(json.dumps(bom,indent=2))
+# Exact Ubuntu package versions in the build image, for the corresponding sources.
+(S/'app/build-packages.txt').write_text(subprocess.check_output(['dpkg-query','-W','-f=${Package} ${Version}\\n'],text=True))
 (S/'AppRun').write_text('''#!/bin/sh
 APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export PORT_APPDIR="$APPDIR" PYTHONHOME="$APPDIR/usr" PYTHONPLATLIBDIR=lib

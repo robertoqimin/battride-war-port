@@ -53,4 +53,20 @@ class ImporterTests(unittest.TestCase):
         r=m.Runner();r.stop()
         with self.assertRaises(m.ImportError):r.run(['/does/not/exist'])
 
+    def test_built_runner_reused_only_for_same_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'app').mkdir()
+            (root/'app/package.json').write_text(json.dumps({'version':'1','sdk_commit':'s','elf_sha256':'e','codecs':{}}))
+            (root/'app/disc-manifest.json').write_text('{}')
+            p=m.Package(root);data=root/'data';(data/'runner').mkdir(parents=True)
+            self.assertIsNone(p.built_runner(data))
+            (data/'runner/game-runner').write_bytes(b'x')
+            (data/'runner/build.json').write_text(json.dumps(p.build_identity()))
+            self.assertEqual(p.built_runner(data),data/'runner/game-runner')
+            other=dict(p.build_identity(),cpu={'model':'other','flags_sha256':'x'})
+            (data/'runner/build.json').write_text(json.dumps(other))
+            self.assertIsNone(p.built_runner(data))
+    def test_build_jobs_positive(self):
+        self.assertGreaterEqual(m.build_jobs(),1)
+
 if __name__=='__main__':unittest.main()

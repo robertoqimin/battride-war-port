@@ -2,7 +2,7 @@
 
 An **experimental** port of Kamen Rider: Battride War (Japan), **BLJS10220**, using PS3Recomp 0.11.0 and Vulkan on Linux. This project is not affiliated with the game's rights holders.
 
-This repository contains port code, configuration, tests, and instructions. **It does not include the game, ISO, EBOOT, firmware, keys, saves, a compiled executable, or complete generated PPU/SPU sources.** Each user must prepare their own local data and generate the sources before building.
+This repository contains port code, configuration, tests, and instructions. **It does not include the game, ISO, EBOOT, firmware, keys, saves, a compiled game executable, or complete generated PPU/SPU sources.** Each user must prepare their own local data and generate the sources before building.
 
 ## Validated status as of October 22, 2026
 
@@ -20,21 +20,23 @@ This repository contains port code, configuration, tests, and instructions. **It
 
 The long gameplay session used a six-second PAMF replacement solely to speed up the introduction. Original assets were not modified; the normal launcher still uses the original video. The entire sequence with that video was not repeated during the latest gameplay validation.
 
-## System requirements (portable AppImage)
+## System requirements (AppImage)
 
-Only one system has been tested: Fedora on a laptop with a Ryzen 5 4600H and GTX 1650 (Radeon integrated graphics alongside; the backend picks the discrete GPU). Everything below meets the checks in `packaging/launcher.py`, `packaging/graphics_probe.c` and the Vulkan backend, but has not been run.
+The AppImage contains no game code or data. On first launch it imports your disc, translates your EBOOT and compiles the game on your computer with its bundled toolchain (see [docs/APPIMAGE.md](docs/APPIMAGE.md)). Only one system has been tested: Fedora on a laptop with a Ryzen 5 4600H and GTX 1650 (Radeon integrated graphics alongside; the backend picks the discrete GPU). Everything below meets the checks in `packaging/launcher.py`, `packaging/graphics_probe.c` and the Vulkan backend, but has not been run.
 
-**CPU:** x86-64-v3: AVX2, FMA, BMI1/BMI2, F16C, MOVBE and LZCNT (the portable runner is built with `PORT_PORTABLE=ON`, `-march=x86-64-v3`; the launcher refuses CPUs without these).
+**First launch:** about 8 GB of RAM (the build runs one compiler job per 2 GB available, at least one), about 8 GB of free space in the data folder (game files, plus about 4 GB while building) and time: the compile took 13 minutes with 4 jobs on the 4600H; expect 15-60 minutes depending on the CPU. It happens once; the built game is reused until the AppImage version or the CPU changes.
+
+**CPU:** x86_64 with SSSE3 and SSE4.1. The game is compiled with `-march=native`, so each CPU gets code for its own instruction set (AVX2 where available).
 
 | Supported | Not supported |
 |---|---|
-| Intel Core 4th gen (Haswell, 2013) and newer: every i3/i5/i7/i9 and Core Ultra from then on | Intel Core 2nd/3rd gen (Sandy/Ivy Bridge: AVX without AVX2) and older |
-| Intel Xeon E3/E5/E7 v3 and newer, Xeon Scalable | Intel Pentium/Celeron/Atom before Tiger Lake, including Goldmont and Jasper Lake |
-| Intel Pentium Gold 7505 (Tiger Lake), N100/N200/N-series and Core i3-N (Alder Lake-N) | AMD FX (Bulldozer/Piledriver), Steamroller APUs, Jaguar/Puma, Phenom and older |
-| AMD Excavator (Carrizo/Bristol Ridge APUs, Athlon X4 9xx) | ARM and RISC-V |
+| Intel Core 2 45 nm (Penryn/Wolfdale/Yorkfield) and newer | Intel Core 2 65 nm (Conroe/Merom): no SSE4.1 |
+| Every Intel Core i3/i5/i7/i9 and Core Ultra generation, Xeon from Nehalem | Intel Atom Bonnell/Saltwell (Silvermont and newer are fine) |
+| Intel Pentium/Celeron from Silvermont/Goldmont, N100/N200 | AMD Athlon 64, Phenom, Phenom II (K8/K10): SSE4a only |
+| AMD FX (Bulldozer/Piledriver), A-series APUs, Jaguar | ARM and RISC-V |
 | Every AMD Ryzen, Threadripper and EPYC generation | |
 
-The 30 fps figures above were measured on that Ryzen 5 4600H with a Zen 2 AVX2 build whose render thread was already close to saturation. CPUs with lower single-thread performance than a 4600H will likely run under 30 fps in combat.
+The 30 fps figures above were measured on that Ryzen 5 4600H with a native Zen 2 build whose render thread was already close to saturation. CPUs with lower single-thread performance than a 4600H will likely run under 30 fps in combat; old CPUs without AVX2 will be noticeably slower.
 
 **GPU:** Vulkan 1.0 with a graphics queue that can present to the window, `VK_KHR_swapchain` and `textureCompressionBC` (PS3 DXT textures). The launcher's graphics check rejects devices without BC textures.
 
@@ -58,7 +60,7 @@ Not supported: GPUs without Vulkan (NVIDIA Fermi and older, AMD TeraScale / HD 6
 | Arch, Manjaro, EndeavourOS, CachyOS, Garuda | NixOS without `steam-run` / `appimage-run` |
 | Recent SteamOS 3 (Steam Deck): likely, unverified | |
 
-On hosts whose libstdc++ is older than RPCS3 needs (below `GLIBCXX_3.4.32`, e.g. Ubuntu 22.04 and Debian 12) the importer runs the RPCS3 helper with RPCS3's own `checkrt` libstdc++/libgcc_s.
+On hosts whose libstdc++ is older than RPCS3 needs (below `GLIBCXX_3.4.32`, e.g. Ubuntu 22.04 and Debian 12) the importer runs the RPCS3 helper with RPCS3's own `checkrt` libstdc++/libgcc_s. No compiler or development package is needed on the host: the bundled Ubuntu 22.04 toolchain builds against its own sysroot.
 
 ## Performance tuning
 
@@ -109,4 +111,4 @@ python3 scripts/export_source.py
 
 See [docs/PUBLISHING.md](docs/PUBLISHING.md) to package or publish with Git. Preparation does not upload anything automatically.
 
-MIT licensed, preserving the PS3Recomp notice in [LICENSE](LICENSE). Adapted file origins and dependencies with other licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This package contains no binary release.
+MIT licensed, preserving the PS3Recomp notice in [LICENSE](LICENSE). Adapted file origins and dependencies with other licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Releases carry only the AppImage of tools and public sources, which builds the game from the player's own disc; no compiled game is distributed.

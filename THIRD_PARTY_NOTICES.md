@@ -28,6 +28,17 @@ The SDK includes an ATRAC3/ATRAC3plus decoder in `third_party/at3_standalone`, d
 
 RPCS3 was used as a reference for firmware interfaces and, in the local development environment, to extract user-supplied firmware. The package does not include its executable or the extracted files.
 
+## AppImage
+
+The AppImage (see [docs/APPIMAGE.md](docs/APPIMAGE.md)) contains no game code or data. It redistributes, unmodified, third-party binaries under their own licenses:
+
+- RPCS3 0.0.43-20370-0b0fa082 (GPL-2.0), from its official AppImage, with the libraries and notices that AppImage carries. Source: https://github.com/RPCS3/rpcs3 at commit 0b0fa082.
+- 7-Zip standalone `7zz` (LGPL-2.1 with the unRAR restriction; see `usr/share/licenses/7zip/License.txt`). Source: https://www.7-zip.org/.
+- Ubuntu 22.04 packages from the build image: FFmpeg, Python 3.10, PyGObject, GTK 3, SDL2, and the toolchain (GCC 11 and binutils under GPL-3.0 with the GCC runtime library exception for linked code, Clang/LLVM 14 under Apache-2.0 with LLVM exceptions, CMake under BSD-3-Clause, Ninja under Apache-2.0, GNU patch under GPL-3.0, glibc headers and static stubs under LGPL-2.1, glslang and SPIRV-Tools static libraries). Each package's copyright file is retained under `usr/share/licenses/build-packages/`. Corresponding sources are the Ubuntu 22.04 (jammy) source packages of the versions listed in `app/build-packages.txt`.
+- The ps3recomp SDK sources at the pinned commit (MIT), including the LGPL-2.1-or-later ATRAC3 decoder in `third_party/at3_standalone`, in source form.
+
+The game executable that the AppImage builds on the player's computer incorporates that decoder, SDL2 and the static glslang/SPIRV-Tools libraries; it is produced locally and is never distributed.
+
 ## Game and firmware
 
 Kamen Rider: Battride War and its assets are not part of this source package. There is no affiliation with or endorsement by the game's rights holders. Sony firmware, `.pic` codecs, keys, saves, the game ELF, and complete generated PPU/SPU sources are local data and are not covered by this repository's license.

@@ -85,12 +85,10 @@ if(PORT_MARCH AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
     message(STATUS "Target CPU:      -march=${PORT_MARCH}")
 endif()
 
-# Portable distribution: x86-64-v3 (AVX2/FMA) CPU and hidden static shader-tool symbols.
-option(PORT_PORTABLE "Build an x86-64-v3 AppImage runner" OFF)
+# The AppImage builds the runner on the player's computer. Keep the static
+# shader-tool symbols hidden there: an exported SPIRV-Tools copy can break RADV.
+option(PORT_PORTABLE "Build the runner as the AppImage does" OFF)
 if(PORT_PORTABLE)
-    if(NOT PORT_MARCH STREQUAL "x86-64-v3")
-        message(FATAL_ERROR "PORT_PORTABLE requires -DPORT_MARCH=x86-64-v3")
-    endif()
     add_link_options("LINKER:--exclude-libs,ALL")
 endif()
 

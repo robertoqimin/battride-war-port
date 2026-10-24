@@ -1,5 +1,5 @@
 # Ubuntu 22.04's glslang 11.8 ships only un-namespaced *Targets.cmake files.
-set(_d /usr/lib/x86_64-linux-gnu/cmake)
+set(_d "${CMAKE_SYSROOT}/usr/lib/x86_64-linux-gnu/cmake")
 find_package(SPIRV-Tools CONFIG REQUIRED PATHS ${_d}/SPIRV-Tools NO_DEFAULT_PATH)
 find_package(SPIRV-Tools-opt CONFIG REQUIRED PATHS ${_d}/SPIRV-Tools-opt NO_DEFAULT_PATH)
 find_package(SPIRV-Tools-link CONFIG REQUIRED PATHS ${_d}/SPIRV-Tools-link NO_DEFAULT_PATH)

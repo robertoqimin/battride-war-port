@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small desktop launcher for the private, locally built AppImage."""
+"""Small desktop launcher: imports the user's disc and builds the game on this computer."""
 import argparse
 import json
 import os
@@ -22,9 +22,10 @@ def cpu_check():
                 break
     except OSError:
         pass
-    missing = {'avx', 'avx2', 'fma', 'bmi1', 'bmi2', 'f16c', 'movbe', 'abm'} - flags
+    # The game is compiled for the local CPU; the SPU code needs SSE4.1.
+    missing = {'ssse3', 'sse4_1'} - flags
     if missing:
-        raise ImportError('This build needs an x86-64-v3 CPU with AVX2/FMA (Intel Haswell, AMD Excavator/Ryzen or newer). Missing: ' + ', '.join(sorted(missing)))
+        raise ImportError('This game needs an x86_64 CPU with SSE4.1. Missing: ' + ', '.join(sorted(missing)))
 
 
 def main():
@@ -43,16 +44,28 @@ def main():
         code, formats = Runner().run(package.tool('7z', 'i'), capture=True)
         if code or 'Codec Load Error' in formats or 'Udf' not in formats:
             raise ImportError('Bundled ISO reader is missing UDF format support.')
+        env = package.build_env(Path.home())
+        compilers = {}
+        for name, tool in (('c', 'usr/lib/llvm-14/bin/clang'), ('cxx', 'usr/bin/x86_64-linux-gnu-g++-11'),
+                           ('cmake', 'usr/bin/cmake'), ('ninja', 'usr/bin/ninja')):
+            code, text = Runner().run([ROOT / 'usr/toolchain/sysroot' / tool, '--version'], env=env, capture=True)
+            if code:
+                raise ImportError('Bundled build tool does not start: ' + name + '\n' + text[-800:])
+            compilers[name] = text.splitlines()[0] if text else ''
         print(json.dumps({'status': 'OK', 'title_id': 'BLJS10220', 'files': len(package.manifest),
-                          'cpu': 'x86-64-v3 / AVX2 FMA', 'elf_sha256': package.meta['elf_sha256']}, indent=2))
+                          'cpu': 'built locally with -march=native (SSE4.1 minimum)', 'toolchain': compilers,
+                          'elf_sha256': package.meta['elf_sha256']}, indent=2))
         return
     default_data = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')) / 'battride-war-port'
     data = (args.data_dir or default_data).resolve()
     if args.import_only:
         data.mkdir(parents=True, exist_ok=True)
+        runner = Runner()
         with (data / 'import.log').open('wb') as log:
-            package.import_iso(args.import_only, data, Runner(), print, log)
+            package.import_iso(args.import_only, data, runner, print, log)
         print('Import verified:', data)
+        with (data / 'build.log').open('wb') as log:
+            print('Game built:', package.build_runner(data, runner, print, log))
         return
     import gi
     gi.require_version('Gtk', '3.0')
@@ -84,7 +97,7 @@ def main():
             box.pack_start(title, False, False, 0)
             subtitle = Gtk.Label(label='Experimental Linux port  •  Japan / BLJS10220', xalign=0)
             box.pack_start(subtitle, False, False, 0)
-            note = Gtk.Label(label='Select your game ISO. The first launch imports and verifies its files.\nYour game data, saves and logs stay in the data folder.', xalign=0)
+            note = Gtk.Label(label='Select your game ISO. The first launch imports its files and builds the game\nfor this computer from your disc (15-60 minutes, once). Data, saves and logs stay in the data folder.', xalign=0)
             note.set_line_wrap(True)
             box.pack_start(note, False, False, 0)
             grid = Gtk.Grid(column_spacing=16, row_spacing=12)
@@ -107,7 +120,7 @@ def main():
             actions.pack_start(self.start, False, False, 0);actions.pack_start(self.stop, False, False, 0)
             box.pack_start(actions, False, False, 0)
             self.progress = Gtk.ProgressBar();box.pack_start(self.progress, False, False, 0)
-            self.status = Gtk.Label(label='Ready. Requires a Vulkan-capable GPU and an AVX2/FMA (x86-64-v3) CPU.', xalign=0)
+            self.status = Gtk.Label(label='Ready. Requires a Vulkan GPU, an SSE4.1 CPU, about 8 GB of RAM and 8 GB of free space.', xalign=0)
             self.status.set_line_wrap(True);box.pack_start(self.status, False, False, 0)
             self.stats = Gtk.Label(label='', xalign=0);box.pack_start(self.stats, False, False, 0)
             GLib.timeout_add(1000, self.tick)
@@ -152,6 +165,8 @@ def main():
                 try:
                     with (self.log_dir / 'import.log').open('wb') as log:
                         package.import_iso(iso, dest, self.runner, self.message, log)
+                    with (self.log_dir / 'build.log').open('wb') as log:
+                        game = package.build_runner(dest, self.runner, self.message, log)
                     self.message('Checking Vulkan driver and window support...')
                     code, details = self.runner.run(package.tool('graphics-probe'),
                                                     env=package.game_env(dest, self.log_dir), capture=True)
@@ -161,7 +176,7 @@ def main():
                     self.playing = True
                     self.message('Starting game. Logs: ' + str(self.log_dir))
                     with (self.log_dir / 'game.log').open('wb') as log:
-                        code, _ = self.runner.run(package.tool('game-runner', dest / 'game/EBOOT.ELF'),
+                        code, _ = self.runner.run([game, dest / 'game/EBOOT.ELF'],
                                                   cwd=dest, env=package.game_env(dest, self.log_dir, hud), log=log)
                     self.message('Game closed.' if code == 0 else 'Game exited (%d). Logs: %s' % (code, self.log_dir))
                 except (OSError, ImportError, ValueError) as e:

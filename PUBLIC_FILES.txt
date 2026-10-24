@@ -63,5 +63,6 @@ packaging/glslang-compat/include/glslang/Public/ResourceLimits.h
 packaging/graphics_probe.c
 packaging/importer.py
 packaging/launcher.py
+scripts/appimage_toolchain.py
 scripts/build_appimage.py
 tests/test_importer.py
