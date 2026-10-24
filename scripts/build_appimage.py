@@ -23,7 +23,6 @@ import appimage_toolchain
 ap=argparse.ArgumentParser(description=__doc__)
 ap.add_argument('--sevenzip-dir',type=Path,required=True)
 ap.add_argument('--runtime',type=Path,required=True)
-ap.add_argument('--rpcs3-dir',type=Path,required=True)
 ap.add_argument('--output',type=Path,required=True)
 ap.add_argument('--stage',type=Path,default=Path('build-appimage/portable/AppDir'))
 ap.add_argument('--sdk',type=Path,help='ps3recomp git checkout (default: ../ps3recomp)')
@@ -34,8 +33,14 @@ if S.exists() or args.output.exists():raise SystemExit('Choose new stage and out
 if subprocess.check_output(['getconf','GNU_LIBC_VERSION'],text=True).strip()!='glibc 2.35':
     raise SystemExit('Build inside the Ubuntu 22.04 container (glibc 2.35).')
 
+# Every file taken from the build image, so collect_sources.py can find its package.
+system_files=set()
 def copy(a,b):
     b.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(a,b)
+    if str(a).startswith(('/usr/','/lib','/etc/')):system_files.add(os.path.realpath(a))
+def copytree(a,b,**kw):
+    shutil.copytree(a,b,**kw)
+    system_files.update(str(p) for p in Path(a).rglob('*') if p.is_file() and not p.is_symlink() and (b/p.relative_to(a)).exists())
 def sha(p):
     h=hashlib.sha256()
     with open(p,'rb') as f:
@@ -57,6 +62,7 @@ def host_library(name):
 
 for d in ('app','usr/bin','usr/lib','usr/share/glib-2.0/schemas'):(S/d).mkdir(parents=True,exist_ok=True)
 for n in ('importer.py','launcher.py'):copy(P/'packaging'/n,S/'app'/n)
+copy(P/'CREDITS.md',S/'app/CREDITS.md')
 spec=json.loads((P/'recompile.json').read_text())
 # The port's public sources, exactly as the source export allowlist names them.
 public=[l.strip() for l in (P/'PUBLIC_FILES.txt').read_text().splitlines() if l.strip() and not l.startswith('#')]
@@ -72,16 +78,13 @@ print('Assembling the compiler toolchain...',flush=True)
 appimage_toolchain.assemble(S/'usr/toolchain')
 copy(sys.executable,S/'usr/bin/python3')
 version='%d.%d'%sys.version_info[:2]
-shutil.copytree(sysconfig.get_path('stdlib'),S/'usr/lib'/('python'+version),ignore=shutil.ignore_patterns('site-packages','dist-packages','__pycache__','test','tests','idlelib','ensurepip','venv'))
+copytree(sysconfig.get_path('stdlib'),S/'usr/lib'/('python'+version),ignore=shutil.ignore_patterns('site-packages','dist-packages','__pycache__','test','tests','idlelib','ensurepip','venv'))
 for n in ('gi','cairo'):
     copyfrom=next((Path(p)/n for p in sys.path if (Path(p)/n).is_dir()))
-    shutil.copytree(copyfrom,S/'usr/lib'/('python'+version)/'site-packages'/n,ignore=shutil.ignore_patterns('__pycache__'))
+    copytree(copyfrom,S/'usr/lib'/('python'+version)/'site-packages'/n,ignore=shutil.ignore_patterns('__pycache__'))
 # GTK resources are private; application GIO plugins from the host are disabled.
-shutil.copytree('/usr/lib/x86_64-linux-gnu/girepository-1.0',S/'usr/lib/girepository-1.0')
+copytree('/usr/lib/x86_64-linux-gnu/girepository-1.0',S/'usr/lib/girepository-1.0')
 copy('/usr/share/glib-2.0/schemas/gschemas.compiled',S/'usr/share/glib-2.0/schemas/gschemas.compiled')
-shutil.copytree(args.rpcs3_dir,S/'usr/rpcs3',symlinks=True)
-for p in list((S/'usr/rpcs3/usr/lib').glob('*')):
-    if host_library(p.name) and (p.is_file() or p.is_symlink()):p.unlink()
 copy(args.sevenzip_dir/'7zz',S/'usr/bin/7z');copy(args.sevenzip_dir/'License.txt',S/'usr/share/licenses/7zip/License.txt')
 for n in ('ffmpeg','ffprobe'):copy('/usr/bin/'+n,S/'usr/bin'/n)
 subprocess.run(['cc','-O2','-march=x86-64','-msse4.1',str(P/'packaging/graphics_probe.c'),'-o',str(S/'usr/bin/graphics-probe'),*subprocess.check_output(['pkg-config','--cflags','--libs','sdl2','vulkan'],text=True).split()],check=True)
@@ -110,8 +113,7 @@ while queue:
         match=re.search(r'=> (/\S+)',line) or re.match(r'\s*(/\S+)',line)
         if match and Path(match[1]).exists():queue.append(Path(match[1]))
         elif 'not found' in line:missing.add(line.strip())
-# RPCS3's private Qt libraries carry its optional dependencies. Record unresolved
-# imports for review, but the actual helper must pass its integration test.
+# Record unresolved imports for review; none are expected.
 (S/'app/unresolved-build-libraries.txt').write_text('\n'.join(sorted(missing)))
 manifest={}
 for p in sorted((P/'game/PS3_GAME').rglob('*')):
@@ -119,11 +121,13 @@ for p in sorted((P/'game/PS3_GAME').rglob('*')):
 p=P/'game/PS3_DISC.SFB'
 if p.exists():manifest['PS3_DISC.SFB']={'size':p.stat().st_size,'sha256':sha(p)}
 (S/'app/disc-manifest.json').write_text(json.dumps(manifest,separators=(',',':')))
-meta={'version':'0.3.0','glibc_min':'2.35','cpu':'built on the player computer, -march=native','elf_sha256':spec['eboot_sha256'],
-      'sdk_commit':spec['sdk_commit'],'codecs':{p.name:sha(p) for p in (P/'firmware/dev_flash/sys/external').glob('*.pic')},
+meta={'version':'0.3.1','glibc_min':'2.35','cpu':'built on the player computer, -march=native','elf_sha256':spec['eboot_sha256'],
+      'sdk_commit':spec['sdk_commit'],'rpcs3':json.loads((P/'packaging/rpcs3.json').read_text()),'codecs':{p.name:sha(p) for p in (P/'firmware/dev_flash/sys/external').glob('*.pic')},
       'sevenzip_sha256':sha(S/'usr/bin/7z'),'runtime_sha256':sha(args.runtime)}
 (S/'app/package.json').write_text(json.dumps(meta,indent=2));(S/'app/library-sources.json').write_text(json.dumps(bom,indent=2))
 # Exact Ubuntu package versions in the build image, for the corresponding sources.
+system_files.update(appimage_toolchain.COPIED)
+(S/'app/system-files.txt').write_text('\n'.join(sorted(system_files))+'\n')
 (S/'app/build-packages.txt').write_text(subprocess.check_output(['dpkg-query','-W','-f=${Package} ${Version}\\n'],text=True))
 (S/'AppRun').write_text('''#!/bin/sh
 APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

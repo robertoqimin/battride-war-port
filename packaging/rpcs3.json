@@ -1,0 +1,8 @@
+{
+  "version": "0.0.43-20370-0b0fa082",
+  "file": "rpcs3-v0.0.43-20370-0b0fa082_linux64.AppImage",
+  "url": "https://github.com/RPCS3/rpcs3-binaries-linux/releases/download/build-0b0fa082ae552ab77a70de4fc1f70110d165116b/rpcs3-v0.0.43-20370-0b0fa082_linux64.AppImage",
+  "size": 83142128,
+  "sha256": "a445633c32d2bf24c338ce3e2195de7c2c17fd4a05191b8fa52a21876482b115",
+  "source": "https://github.com/RPCS3/rpcs3/tree/0b0fa082ae552ab77a70de4fc1f70110d165116b"
+}

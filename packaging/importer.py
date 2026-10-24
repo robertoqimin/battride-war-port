@@ -6,9 +6,12 @@ import re
 from pathlib import Path, PurePosixPath
 import shutil
 import signal
+import ssl
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 
 
@@ -24,21 +27,36 @@ def digest(path):
         return value.hexdigest()
 
 
-def host_lib(name):
-    for d in ('/usr/lib/x86_64-linux-gnu', '/lib/x86_64-linux-gnu', '/usr/lib64', '/lib64', '/usr/lib', '/lib'):
-        if (Path(d) / name).is_file():
-            return Path(d) / name
-    return None
+# Where distributions keep the CA bundle; the bundled Python looks in Ubuntu's place.
+CA_BUNDLES = ('/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt',
+              '/etc/ssl/ca-bundle.pem', '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem', '/etc/ssl/cert.pem')
 
 
-def symbol_version(path, prefix):
-    """Highest symbol version (e.g. GLIBCXX_3.4.32) a library provides; () if unknown."""
+def download(url, dest, expected_sha256, expected_size, cancelled, status=lambda _: None):
+    """Fetch url over verified TLS into dest; the SHA-256 must match."""
+    cafile = os.environ.get('SSL_CERT_FILE') or next((c for c in CA_BUNDLES if Path(c).is_file()), None)
+    context = ssl.create_default_context(cafile=cafile)
+    value, done, shown = hashlib.sha256(), 0, 0.0
     try:
-        data = Path(path).read_bytes()
-    except (OSError, TypeError):
-        return ()
-    return max((tuple(int(x) for x in m.split(b'.'))
-                for m in re.findall(re.escape(prefix) + rb'(\d+(?:\.\d+)*)\x00', data)), default=())
+        with urllib.request.urlopen(url, context=context, timeout=60) as response, dest.open('wb') as out:
+            while True:
+                if cancelled.is_set():
+                    raise ImportError('Operation cancelled')
+                block = response.read(1024 * 1024)
+                if not block:
+                    break
+                out.write(block)
+                value.update(block)
+                done += len(block)
+                if time.monotonic() - shown > 1:
+                    shown = time.monotonic()
+                    status('Downloading the official RPCS3 build: %d / %d MB' % (done >> 20, expected_size >> 20))
+    except (OSError, urllib.error.URLError) as e:
+        raise ImportError('Could not download RPCS3 from GitHub (%s). Check the internet connection, or start '
+                          'with --rpcs3 /path/to/%s.' % (e, url.rsplit('/', 1)[-1]))
+    if done != expected_size or value.hexdigest() != expected_sha256:
+        dest.unlink()
+        raise ImportError('The downloaded RPCS3 file does not match the expected build; it was deleted.')
 
 
 # Bump when the local build recipe changes, so existing runners are rebuilt.
@@ -156,30 +174,56 @@ class Package:
         return [self.root / 'usr/bin' / name, *args]
 
     def helper_env(self, stage):
+        # RPCS3's own AppRun sets up its libraries (and its checkrt C++ runtime
+        # on older hosts); nothing of this AppImage's environment may leak in.
         env = os.environ.copy()
         for key in list(env):
             if key.startswith(('APPIMAGE', 'PYTHON', 'GI_', 'GTK_', 'GDK_', 'QT_')) or key in (
                     'APPDIR', 'LD_LIBRARY_PATH', 'LD_PRELOAD', 'GIO_MODULE_DIR', 'GSETTINGS_SCHEMA_DIR', 'MANGOHUD'):
                 env.pop(key, None)
-        env['LD_LIBRARY_PATH'] = ':'.join(self.rpcs3_runtime() + [str(self.root / 'usr/rpcs3/usr/lib'),
-                                                                  str(self.root / 'usr/lib')])
         env.update(XDG_CONFIG_HOME=str(stage / 'rpcs3-config'),
                    XDG_CACHE_HOME=str(stage / 'rpcs3-cache'), XDG_DATA_HOME=str(stage / 'rpcs3-data'))
         return env
 
-    def rpcs3_runtime(self):
-        # RPCS3's AppRun normally runs checkrt, which prefers its bundled C++
-        # runtime when the host one is older. We start the binary directly, so
-        # repeat that choice; otherwise GCC 12 hosts lack GLIBCXX_3.4.32.
-        dirs = []
-        for sub, name, prefix in (('cxx', 'libstdc++.so.6', b'GLIBCXX_'), ('gcc', 'libgcc_s.so.1', b'GCC_')):
-            bundled = self.root / 'usr/rpcs3/checkrt' / sub / name
-            if bundled.is_file() and symbol_version(bundled, prefix) > symbol_version(host_lib(name), prefix):
-                dirs.append(str(bundled.parent))
-        return dirs
+    def rpcs3_helper(self, data, runner, status=lambda _: None, local=None, log=None):
+        """The official RPCS3 build pinned in rpcs3.json, extracted once into the data folder.
 
-    def rpcs3(self, *args):
-        return [self.root / 'usr/rpcs3/usr/bin/rpcs3', '--allow-any-location', '--headless', *args]
+        RPCS3 is not redistributed with this AppImage: it is downloaded from the
+        RPCS3 project's own release, or taken from a copy the user already has.
+        """
+        info = self.meta['rpcs3']
+        base = Path(data) / 'tools' / ('rpcs3-' + info['version'])
+        apprun = base / 'squashfs-root/AppRun'
+        if apprun.is_file() and (base / 'verified').is_file():
+            return apprun
+        shutil.rmtree(base, ignore_errors=True)
+        base.mkdir(parents=True)
+        image = base / info['file']
+        candidates = [Path(local)] if local else []
+        candidates += [Path(os.environ.get('XDG_DOWNLOAD_DIR', Path.home() / 'Downloads')) / info['file'],
+                       Path.home() / 'Downloads' / info['file']]
+        for candidate in candidates:
+            if candidate.is_file() and candidate.stat().st_size == info['size'] and digest(candidate) == info['sha256']:
+                status('Using your RPCS3 copy: ' + str(candidate))
+                shutil.copy2(candidate, image)
+                break
+        else:
+            if local:
+                raise ImportError('The selected RPCS3 file is not the expected build ' + info['file'])
+            status('Downloading the official RPCS3 build (%d MB) from GitHub...' % (info['size'] >> 20))
+            download(info['url'], image, info['sha256'], info['size'], runner.cancelled, status)
+        image.chmod(0o755)
+        status('Unpacking RPCS3...')
+        # --appimage-extract needs no FUSE.
+        code, _ = runner.run([image, '--appimage-extract'], cwd=base, log=log)
+        image.unlink()
+        if code or not apprun.is_file():
+            raise ImportError('RPCS3 could not be unpacked. See import.log.')
+        (base / 'verified').write_text(info['sha256'] + '\n')
+        return apprun
+
+    def rpcs3(self, apprun, *args):
+        return [apprun, '--allow-any-location', '--headless', *args]
 
     def verify_game(self, game, status=lambda _: None):
         for i, (name, info) in enumerate(self.manifest.items()):
@@ -192,7 +236,7 @@ class Package:
             if i % 500 == 0:
                 status('Verifying game files: %d / %d' % (i + 1, len(self.manifest)))
 
-    def import_iso(self, iso, data, runner, status=lambda _: None, log=None):
+    def import_iso(self, iso, data, runner, status=lambda _: None, log=None, rpcs3=None):
         iso, data = Path(iso).resolve(), Path(data).resolve()
         if not iso.is_file():
             raise ImportError('Select a readable ISO file')
@@ -241,6 +285,8 @@ class Package:
             pup = 'PS3_UPDATE/PS3UPDAT.PUP'
             if pup not in entries:
                 raise ImportError('The ISO must include PS3_UPDATE/PS3UPDAT.PUP for local audio codec setup.')
+            # Only a disc that passed the listing checks is worth fetching RPCS3 for.
+            apprun = self.rpcs3_helper(data, runner, status, rpcs3, log)
             selected = stage / 'selected-files.txt'
             selected.write_text('\n'.join([*self.manifest, pup]) + '\n')
             status('Extracting your ISO. This can take a few minutes...')
@@ -252,14 +298,14 @@ class Package:
             if code and log:
                 log.write(b'Archive returned a nonzero status; every expected game file was verified.\n')
             status('Preparing EBOOT from your disc...')
-            runner.run(self.rpcs3('--decrypt', game / 'PS3_GAME/USRDIR/EBOOT.BIN'),
+            runner.run(self.rpcs3(apprun, '--decrypt', game / 'PS3_GAME/USRDIR/EBOOT.BIN'),
                        env=self.helper_env(stage), log=log)
             elf = game / 'PS3_GAME/USRDIR/EBOOT.elf'
             if not elf.is_file() or digest(elf) != self.meta['elf_sha256']:
                 raise ImportError('EBOOT could not be prepared or does not match this port.')
             elf.rename(game / 'EBOOT.ELF')
             status('Extracting audio codecs from your disc firmware...')
-            runner.run(self.rpcs3('--installfw', game / pup), env=self.helper_env(stage), log=log)
+            runner.run(self.rpcs3(apprun, '--installfw', game / pup), env=self.helper_env(stage), log=log)
             fw = stage / 'firmware/dev_flash/sys/external'
             fw.mkdir(parents=True)
             source = stage / 'rpcs3-config/rpcs3/dev_flash/sys/external'
@@ -283,6 +329,12 @@ class Package:
             tmp = data / 'import.json.tmp'
             tmp.write_text(json.dumps({'source': identity, 'title_id': 'BLJS10220', 'elf_sha256': self.meta['elf_sha256']}, indent=2))
             tmp.replace(marker)
+            # RPCS3 was only needed for the EBOOT and the codecs.
+            shutil.rmtree(apprun.parent.parent, ignore_errors=True)
+            try:
+                (data / 'tools').rmdir()
+            except OSError:
+                pass
             return data / 'game'
         except BaseException:
             for p in committed:

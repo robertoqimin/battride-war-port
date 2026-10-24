@@ -66,6 +66,14 @@ class ImporterTests(unittest.TestCase):
             other=dict(p.build_identity(),cpu={'model':'other','flags_sha256':'x'})
             (data/'runner/build.json').write_text(json.dumps(other))
             self.assertIsNone(p.built_runner(data))
+    def test_wrong_local_rpcs3_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'app').mkdir()
+            info={'version':'v','file':'r.AppImage','url':'https://invalid.example/r','size':3,'sha256':'0'*64}
+            (root/'app/package.json').write_text(json.dumps({'rpcs3':info}));(root/'app/disc-manifest.json').write_text('{}')
+            fake=root/'r.AppImage';fake.write_bytes(b'bad')
+            with self.assertRaisesRegex(m.ImportError,'not the expected build'):
+                m.Package(root).rpcs3_helper(root/'data',m.Runner(),local=fake)
     def test_build_jobs_positive(self):
         self.assertGreaterEqual(m.build_jobs(),1)
 

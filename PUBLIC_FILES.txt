@@ -1,6 +1,7 @@
 .gitignore
 CMakeLists.txt
 CMakePresets.json
+CREDITS.md
 LICENSE
 PUBLIC_FILES.txt
 README.md
@@ -63,6 +64,8 @@ packaging/glslang-compat/include/glslang/Public/ResourceLimits.h
 packaging/graphics_probe.c
 packaging/importer.py
 packaging/launcher.py
+packaging/rpcs3.json
 scripts/appimage_toolchain.py
 scripts/build_appimage.py
+scripts/collect_sources.py
 tests/test_importer.py

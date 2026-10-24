@@ -41,6 +41,10 @@ SYSTEM = ('ld-linux', 'libc.so', 'libm.so', 'libpthread.so', 'libdl.so', 'librt.
 LINKED = ('usr/lib/x86_64-linux-gnu/libSDL2-2.0.so.0',)
 
 
+# System files copied into the sysroot, for the corresponding-source collection.
+COPIED = set()
+
+
 def placed(root, path):
     """Path inside root for an absolute path, following merged-/usr directories."""
     parent = os.path.realpath(os.path.dirname(path))
@@ -60,6 +64,7 @@ def copy_entry(root, path):
         copy_entry(root, os.path.join(os.path.dirname(path), os.readlink(path)))
     elif os.path.isfile(path):
         shutil.copy2(path, dest)
+        COPIED.add(path)
 
 
 def closure(paths):

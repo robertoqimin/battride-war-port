@@ -26,18 +26,25 @@ The source package does not include SDL, Vulkan, glslang, SPIR-V Tools, FFmpeg, 
 
 The SDK includes an ATRAC3/ATRAC3plus decoder in `third_party/at3_standalone`, derived from FFmpeg and obtained from PPSSPP, under LGPL-2.1-or-later. This ZIP does not contain that decoder, but the executable produced by the build incorporates it. Before distributing a binary, review that component's `README` and `COPYING.LGPLv2.1` files and the notices for other dependencies. This preparation covers source publication, without a binary release.
 
-RPCS3 was used as a reference for firmware interfaces and, in the local development environment, to extract user-supplied firmware. The package does not include its executable or the extracted files.
+RPCS3 was used as a reference for firmware interfaces and, in the local development environment, to extract user-supplied firmware. The source package does not include its executable or the extracted files.
 
 ## AppImage
 
-The AppImage (see [docs/APPIMAGE.md](docs/APPIMAGE.md)) contains no game code or data. It redistributes, unmodified, third-party binaries under their own licenses:
+The AppImage (see [docs/APPIMAGE.md](docs/APPIMAGE.md)) contains no game code or data. People and projects are credited in [CREDITS.md](CREDITS.md).
 
-- RPCS3 0.0.43-20370-0b0fa082 (GPL-2.0), from its official AppImage, with the libraries and notices that AppImage carries. Source: https://github.com/RPCS3/rpcs3 at commit 0b0fa082.
-- 7-Zip standalone `7zz` (LGPL-2.1 with the unRAR restriction; see `usr/share/licenses/7zip/License.txt`). Source: https://www.7-zip.org/.
-- Ubuntu 22.04 packages from the build image: FFmpeg, Python 3.10, PyGObject, GTK 3, SDL2, and the toolchain (GCC 11 and binutils under GPL-3.0 with the GCC runtime library exception for linked code, Clang/LLVM 14 under Apache-2.0 with LLVM exceptions, CMake under BSD-3-Clause, Ninja under Apache-2.0, GNU patch under GPL-3.0, glibc headers and static stubs under LGPL-2.1, glslang and SPIRV-Tools static libraries). Each package's copyright file is retained under `usr/share/licenses/build-packages/`. Corresponding sources are the Ubuntu 22.04 (jammy) source packages of the versions listed in `app/build-packages.txt`.
-- The ps3recomp SDK sources at the pinned commit (MIT), including the LGPL-2.1-or-later ATRAC3 decoder in `third_party/at3_standalone`, in source form.
+**Corresponding source.** Every release that carries the AppImage also carries `BattrideWarPort-v<version>-sources.tar` on the same release page, produced by `scripts/collect_sources.py` from the same build. It holds the complete source of every third-party binary in the AppImage, with a `SOURCES.md` index:
 
-The game executable that the AppImage builds on the player's computer incorporates that decoder, SDL2 and the static glslang/SPIRV-Tools libraries; it is produced locally and is never distributed.
+- the Ubuntu 22.04 source packages, at exactly the installed versions, of every package a bundled file came from (`app/system-files.txt` lists those files; `app/build-packages.txt` lists the build image's package versions). This covers the toolchain (GCC 11 and binutils, GPL-3.0 with the GCC runtime library exception for linked code; Clang/LLVM 14, Apache-2.0 with LLVM exceptions; CMake, BSD-3-Clause; Ninja, Apache-2.0; GNU patch, GPL-3.0; glibc, LGPL-2.1), FFmpeg and its libraries, Python 3.10, PyGObject, pycairo, GTK 3 and GLib, SDL2, glslang and SPIRV-Tools, and their dependencies;
+- 7-Zip 26.03 (`usr/bin/7z`; LGPL-2.1 with the unRAR restriction; `usr/share/licenses/7zip/License.txt`);
+- the AppImage type2 runtime (MIT) at the commit used, and the libfuse 3.15.0 (LGPL-2.1) and squashfuse 0.5.2 (BSD-2-Clause) sources its build links statically.
+
+Each Ubuntu package's copyright file is also retained inside the AppImage under `usr/share/licenses/build-packages/`. These binaries are redistributed unmodified; the source is offered for at least as long as the release that carries them stays published.
+
+The port's own code (MIT) and the ps3recomp SDK at the pinned commit (MIT, including the LGPL-2.1-or-later ATRAC3 decoder in `third_party/at3_standalone`) are inside the AppImage in source form, under `usr/share/battride/`.
+
+**RPCS3 is not redistributed.** On first import the launcher downloads the official RPCS3 build pinned in `packaging/rpcs3.json` (0.0.43-20370-0b0fa082, GPL-2.0) from the RPCS3 project's release page, checks its SHA-256, uses it to decrypt the player's EBOOT and extract the firmware codecs, and deletes it. Its source is published by the RPCS3 project at https://github.com/RPCS3/rpcs3.
+
+The game executable that the AppImage builds on the player's computer incorporates the ATRAC3 decoder, SDL2 and the static glslang/SPIRV-Tools libraries; it is produced locally and is never distributed.
 
 ## Game and firmware
 

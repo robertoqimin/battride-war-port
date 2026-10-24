@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import threading
 import time
@@ -33,6 +34,8 @@ def main():
     ap.add_argument('--check', action='store_true')
     ap.add_argument('--import-only', type=Path, metavar='ISO')
     ap.add_argument('--data-dir', type=Path)
+    ap.add_argument('--rpcs3', type=Path, metavar='APPIMAGE',
+                    help='use this copy of the pinned RPCS3 AppImage instead of downloading it')
     ap.add_argument('--screenshot', type=Path, help=argparse.SUPPRESS)
     args = ap.parse_args()
     package = Package(ROOT)
@@ -62,7 +65,7 @@ def main():
         data.mkdir(parents=True, exist_ok=True)
         runner = Runner()
         with (data / 'import.log').open('wb') as log:
-            package.import_iso(args.import_only, data, runner, print, log)
+            package.import_iso(args.import_only, data, runner, print, log, args.rpcs3)
         print('Import verified:', data)
         with (data / 'build.log').open('wb') as log:
             print('Game built:', package.build_runner(data, runner, print, log))
@@ -97,7 +100,7 @@ def main():
             box.pack_start(title, False, False, 0)
             subtitle = Gtk.Label(label='Experimental Linux port  •  Japan / BLJS10220', xalign=0)
             box.pack_start(subtitle, False, False, 0)
-            note = Gtk.Label(label='Select your game ISO. The first launch imports its files and builds the game\nfor this computer from your disc (15-60 minutes, once). Data, saves and logs stay in the data folder.', xalign=0)
+            note = Gtk.Label(label='Select your game ISO. The first launch downloads the official RPCS3 build to read your disc,\nimports its files and builds the game for this computer (15-60 minutes, once). Data, saves and logs stay in the data folder.', xalign=0)
             note.set_line_wrap(True)
             box.pack_start(note, False, False, 0)
             grid = Gtk.Grid(column_spacing=16, row_spacing=12)
@@ -117,7 +120,9 @@ def main():
             actions = Gtk.Box(spacing=10)
             self.start = Gtk.Button(label='Import ISO & Play');self.start.connect('clicked', self.begin)
             self.stop = Gtk.Button(label='Stop');self.stop.set_sensitive(False);self.stop.connect('clicked', self.stop_job)
+            credits = Gtk.Button(label='Credits & licenses');credits.connect('clicked', self.show_credits)
             actions.pack_start(self.start, False, False, 0);actions.pack_start(self.stop, False, False, 0)
+            actions.pack_end(credits, False, False, 0)
             box.pack_start(actions, False, False, 0)
             self.progress = Gtk.ProgressBar();box.pack_start(self.progress, False, False, 0)
             self.status = Gtk.Label(label='Ready. Requires a Vulkan GPU, an SSE4.1 CPU, about 8 GB of RAM and 8 GB of free space.', xalign=0)
@@ -164,7 +169,7 @@ def main():
             def worker():
                 try:
                     with (self.log_dir / 'import.log').open('wb') as log:
-                        package.import_iso(iso, dest, self.runner, self.message, log)
+                        package.import_iso(iso, dest, self.runner, self.message, log, args.rpcs3)
                     with (self.log_dir / 'build.log').open('wb') as log:
                         game = package.build_runner(dest, self.runner, self.message, log)
                     self.message('Checking Vulkan driver and window support...')
@@ -185,6 +190,28 @@ def main():
                     self.playing = False
                     self.sensitive(True)
             threading.Thread(target=worker, daemon=False).start()
+
+        def show_credits(self, _):
+            dialog = Gtk.Dialog(title='Credits & licenses', transient_for=self.window, modal=True)
+            dialog.add_button('Close', Gtk.ResponseType.CLOSE)
+            dialog.set_default_size(680, 520)
+            view = Gtk.TextView(editable=False, cursor_visible=False, wrap_mode=Gtk.WrapMode.WORD)
+            view.set_left_margin(12);view.set_right_margin(12)
+            try:
+                text = (ROOT / 'app/CREDITS.md').read_text()
+            except OSError:
+                text = 'CREDITS.md is missing from this AppImage.'
+            # Plain text view: drop the Markdown emphasis, heading marks and link targets.
+            text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+            text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+            text = re.sub(r'^#+ ', '', text, flags=re.M)
+            text += ('\nLicense texts and THIRD_PARTY_NOTICES.md: ' + str(ROOT / 'usr/share/licenses') +
+                     '\nCorresponding source code for every bundled component is published next to this '
+                     'AppImage on the release page:\nhttps://github.com/robertoqimin/battride-war-port/releases\n')
+            view.get_buffer().set_text(text)
+            scroll = Gtk.ScrolledWindow();scroll.add(view);scroll.set_vexpand(True)
+            dialog.get_content_area().pack_start(scroll, True, True, 0)
+            dialog.show_all();dialog.run();dialog.destroy()
 
         def stop_job(self, _):
             if self.runner:

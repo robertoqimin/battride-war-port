@@ -24,7 +24,7 @@ The long gameplay session used a six-second PAMF replacement solely to speed up 
 
 The AppImage contains no game code or data. On first launch it imports your disc, translates your EBOOT and compiles the game on your computer with its bundled toolchain (see [docs/APPIMAGE.md](docs/APPIMAGE.md)). Only one system has been tested: Fedora on a laptop with a Ryzen 5 4600H and GTX 1650 (Radeon integrated graphics alongside; the backend picks the discrete GPU). Everything below meets the checks in `packaging/launcher.py`, `packaging/graphics_probe.c` and the Vulkan backend, but has not been run.
 
-**First launch:** about 8 GB of RAM (the build runs one compiler job per 2 GB available, at least one), about 8 GB of free space in the data folder (game files, plus about 4 GB while building) and time: the compile took 13 minutes with 4 jobs on the 4600H; expect 15-60 minutes depending on the CPU. It happens once; the built game is reused until the AppImage version or the CPU changes.
+**First launch:** an internet connection to download the official RPCS3 build (83 MB) that reads your disc, unless you already have that exact file; about 8 GB of RAM (the build runs one compiler job per 2 GB available, at least one), about 8 GB of free space in the data folder (game files, plus about 4 GB while building) and time: the compile took 13 minutes with 4 jobs on the 4600H; expect 15-60 minutes depending on the CPU. It happens once; the built game is reused until the AppImage version or the CPU changes.
 
 **CPU:** x86_64 with SSSE3 and SSE4.1. The game is compiled with `-march=native`, so each CPU gets code for its own instruction set (AVX2 where available).
 
@@ -60,7 +60,7 @@ Not supported: GPUs without Vulkan (NVIDIA Fermi and older, AMD TeraScale / HD 6
 | Arch, Manjaro, EndeavourOS, CachyOS, Garuda | NixOS without `steam-run` / `appimage-run` |
 | Recent SteamOS 3 (Steam Deck): likely, unverified | |
 
-On hosts whose libstdc++ is older than RPCS3 needs (below `GLIBCXX_3.4.32`, e.g. Ubuntu 22.04 and Debian 12) the importer runs the RPCS3 helper with RPCS3's own `checkrt` libstdc++/libgcc_s. No compiler or development package is needed on the host: the bundled Ubuntu 22.04 toolchain builds against its own sysroot.
+On hosts whose libstdc++ is older than RPCS3 needs (below `GLIBCXX_3.4.32`, e.g. Ubuntu 22.04 and Debian 12) RPCS3's own `AppRun` uses its bundled `checkrt` libstdc++/libgcc_s. No compiler or development package is needed on the host: the bundled Ubuntu 22.04 toolchain builds against its own sysroot.
 
 ## Performance tuning
 
@@ -111,4 +111,6 @@ python3 scripts/export_source.py
 
 See [docs/PUBLISHING.md](docs/PUBLISHING.md) to package or publish with Git. Preparation does not upload anything automatically.
 
-MIT licensed, preserving the PS3Recomp notice in [LICENSE](LICENSE). Adapted file origins and dependencies with other licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Releases carry only the AppImage of tools and public sources, which builds the game from the player's own disc; no compiled game is distributed.
+Credits for the people and projects behind this port are in [CREDITS.md](CREDITS.md).
+
+MIT licensed, preserving the PS3Recomp notice in [LICENSE](LICENSE). Adapted file origins and dependencies with other licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Releases carry only the AppImage of tools and public sources, which builds the game from the player's own disc, and the corresponding source of every third-party binary in it; no compiled game is distributed.
