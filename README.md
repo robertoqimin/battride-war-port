@@ -1,4 +1,4 @@
-# kamenriderbattridewarsport
+# Battride War Port
 
 An **experimental** port of Kamen Rider: Battride War (Japan), **BLJS10220**, using PS3Recomp 0.11.0 and Vulkan on Linux. This project is not affiliated with the game's rights holders.
 
