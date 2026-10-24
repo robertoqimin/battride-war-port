@@ -132,6 +132,14 @@ target_sources(ps3recomp_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/spu_interp
 set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/spu_interp_bridge.c" TARGET_DIRECTORY ps3recomp_runtime
     PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu")
 
+# Measured FIFO hotspot: four-component vertex decoding, with exact SIMD paths.
+get_target_property(PORT_VERTEX_SOURCES ps3recomp_runtime SOURCES)
+list(FILTER PORT_VERTEX_SOURCES EXCLUDE REGEX "libs/video/rsx_vertex_compact\\.c$")
+set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${PORT_VERTEX_SOURCES}")
+target_sources(ps3recomp_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/rsx_vertex_bridge.c")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/rsx_vertex_bridge.c" TARGET_DIRECTORY ps3recomp_runtime
+    PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/libs/video")
+
 # The SDK's SPU reservation tracking, with its bitmap readable in place.
 get_target_property(PORT_SPU_COH_SOURCES ps3recomp_runtime SOURCES)
 list(FILTER PORT_SPU_COH_SOURCES EXCLUDE REGEX "runtime/spu/spu_coherency\\.c$")
@@ -304,6 +312,34 @@ if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app.rc")
     target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/app.rc")
 endif()
 
+# Optional GCC PGO for the translated PPU and C++ harness. Keep the same
+# build directory for training and use: GCC embeds object paths in gcda names.
+set(PORT_PGO "off" CACHE STRING "GCC PPU profiling: off, generate, use")
+set_property(CACHE PORT_PGO PROPERTY STRINGS off generate use)
+set(PORT_PGO_DIR "${CMAKE_CURRENT_BINARY_DIR}/pgo" CACHE PATH "Private GCC profile directory")
+if(NOT PORT_PGO MATCHES "^(off|generate|use)$")
+    message(FATAL_ERROR "PORT_PGO must be off, generate, or use")
+endif()
+if(NOT PORT_PGO STREQUAL "off")
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        message(FATAL_ERROR "PORT_PGO currently requires GCC for C++")
+    endif()
+    if(PORT_PGO STREQUAL "generate")
+        target_compile_options(${PROJECT_NAME} PRIVATE
+            "$<$<COMPILE_LANGUAGE:CXX>:-fprofile-generate=${PORT_PGO_DIR}>"
+            "$<$<COMPILE_LANGUAGE:CXX>:-fprofile-update=atomic>")
+        target_link_options(${PROJECT_NAME} PRIVATE "-fprofile-generate=${PORT_PGO_DIR}")
+    else()
+        file(GLOB_RECURSE PORT_PGO_DATA "${PORT_PGO_DIR}/*.gcda")
+        if(NOT PORT_PGO_DATA)
+            message(FATAL_ERROR "No GCC training profiles in PORT_PGO_DIR")
+        endif()
+        target_compile_options(${PROJECT_NAME} PRIVATE
+            "$<$<COMPILE_LANGUAGE:CXX>:-fprofile-use=${PORT_PGO_DIR}>"
+            "$<$<COMPILE_LANGUAGE:CXX>:-fprofile-correction>")
+    endif()
+endif()
+
 # Port-local overrides of SDK headers the lifted code includes (ppu_vmx.h:
 # SIMD float ops). Searched before the SDK's own copies.
 target_include_directories(${PROJECT_NAME} BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -401,3 +437,30 @@ install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION bin)
 set_source_files_properties(spu_bridge.c PROPERTIES INCLUDE_DIRECTORIES "${PS3RECOMP_DIR}/runtime/spu;${SPU_DIR}")
 
 set_source_files_properties(fs_bridge.cpp PROPERTIES COMPILE_DEFINITIONS "PORT_PPU_FS_SOURCE=\"${PS3RECOMP_DIR}/runtime/ppu/ppu_fs.cpp\"")
+
+# The combat CPU profile identifies func_004B5120 (tree traversal) in chunk
+# 029 as a hot PPU path. Optimize that translation unit more aggressively,
+# keeping the rest at the preset's O2 and preserving strict FP contraction.
+option(PORT_HOT_PPU_O3 "Use O3 for the profiled hot PPU chunk" ON)
+if(PORT_HOT_PPU_O3 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    foreach(source IN LISTS RECOMP_SOURCES)
+        if(source MATCHES "ppu_recomp_029\\.cpp$")
+            set_property(SOURCE "${source}" APPEND PROPERTY COMPILE_OPTIONS -O3)
+        endif()
+    endforeach()
+endif()
+
+# Memory helpers dominate the busy PPU thread's combat profile. Apply the
+# guarded inline paths only to profiled chunks, avoiding growth in cold code.
+option(PORT_PPU_FAST_MEMORY "Inline guarded PPU memory accesses in hot chunks" ON)
+set(PORT_PPU_FAST_MEMORY_CHUNKS "015;017;021;029;030" CACHE STRING "Generated PPU chunks using guarded inline memory")
+if(PORT_PPU_FAST_MEMORY AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU" AND NOT WIN32)
+    foreach(chunk IN LISTS PORT_PPU_FAST_MEMORY_CHUNKS)
+        set(source "${RECOMP_DIR}/ppu_recomp_${chunk}.cpp")
+        if(NOT EXISTS "${source}")
+            message(FATAL_ERROR "Missing PPU memory optimization chunk: ${chunk}")
+        endif()
+        set_property(SOURCE "${source}" APPEND PROPERTY COMPILE_OPTIONS
+            "-include" "${CMAKE_CURRENT_SOURCE_DIR}/include/port_ppu_memory.h")
+    endforeach()
+endif()

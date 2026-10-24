@@ -38,6 +38,7 @@
  * names over pthreads and mmap, so the call sites below are written once. */
 #include "win32_compat.h"
 
+#include <chrono>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -197,6 +198,28 @@ static void present_guest_frame(void)
     /* This thread increments and guest threads read, so interlocked rather
      * than a volatile ++, which on arm64 is neither atomic nor a fence. */
     InterlockedIncrement(&g_frames_presented);
+    /* Guest frame completion intervals, not GPU display timings. Buffered
+     * CSV logging is opt-in and does no file I/O on normal runs. */
+    static FILE* timings = []() -> FILE* {
+        const char* path = getenv("PORT_FRAME_TIMES");
+        if (!path || !*path) return nullptr;
+        FILE* f = fopen(path, "w");
+        if (f) { setvbuf(f, nullptr, _IOFBF, 65536); fprintf(f, "frame,elapsed_ms,interval_ms\n"); }
+        return f;
+    }();
+    if (timings) {
+        using clock = std::chrono::steady_clock;
+        static const auto start = clock::now();
+        static auto last = start;
+        static bool have_last = false;
+        const auto now = clock::now();
+        const double elapsed = std::chrono::duration<double, std::milli>(now-start).count();
+        const double interval = have_last ? std::chrono::duration<double, std::milli>(now-last).count() : 0.0;
+        have_last = true;
+        fprintf(timings, "%u,%.6f,%.6f\n", ppu_boot_frames_presented(), elapsed, interval);
+        last = now;
+        if (ppu_boot_frames_presented() % 60u == 0) fflush(timings);
+    }
 }
 
 /* Set once the frame clock has created the window (or failed to). The guest

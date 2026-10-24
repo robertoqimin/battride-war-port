@@ -48,3 +48,14 @@ __pycache__/
 /CMakeUserPresets.json
 /core
 /core.*
+
+# Private compiler training profiles.
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# Private portable binaries and build staging.
+/build-appimage/
+/dist/
+*.AppImage

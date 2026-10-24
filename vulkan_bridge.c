@@ -612,12 +612,41 @@ static void vk_cmd_after_everything(VkCommandBuffer cb)
                           VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &mb, 0, NULL, 0, NULL);
 }
 
+/* Generic operations end an engine pass before transfers, clears, snapshots,
+ * or presentation. Adjacent engine draws may share the same attachments. */
+static VkPipeline s_bound_pipeline;
+static VkRenderPass s_open_pass;
+static VkFramebuffer s_open_fb;
+static int s_draw_begin;
+static void vk_close_engine_pass(void)
+{
+    if (!s_open_pass) return;
+    pvkCmdEndRenderPass(s_vk.cmd);
+    s_open_pass = VK_NULL_HANDLE;
+    s_open_fb = VK_NULL_HANDLE;
+}
+static int vk_merge_passes(void)
+{
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("PORT_VK_MERGE_PASSES"); on = !e || *e != '0'; }
+    return on;
+}
+
+static void vk_bind_pipeline(VkPipeline pipe)
+{
+    if (s_bound_pipeline == pipe) return;
+    pvkCmdBindPipeline(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    s_bound_pipeline = pipe;
+}
+
 static int vk_begin(void)
 {
+    if (!s_draw_begin) vk_close_engine_pass();
     if (s_vk.recording) {
         if (s_vk.present_order) { vk_cmd_after_everything(s_vk.cmd); s_vk.present_order = 0; }
         return 0;
     }
+    s_bound_pipeline = VK_NULL_HANDLE;
     VK_CHECK(pvkResetCommandBuffer(s_vk.cmd, 0), "vkResetCommandBuffer");
     VkCommandBufferBeginInfo bi = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
                                     .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
@@ -646,6 +675,7 @@ static void vk_slot_retire(u32 k)
 static int vk_submit_current(void)
 {
     if (!s_vk.recording) return 0;
+    vk_close_engine_pass();
     s_vk.recording = 0;
     s_vk.batch_ops = 0;
     VK_CHECK(pvkEndCommandBuffer(s_vk.cmd), "vkEndCommandBuffer");
@@ -1685,7 +1715,7 @@ static int vk_guest_draw(const rsx_state* st, u32 prim, u32 first, u32 count)
                                   .renderPass = s_vk.render_pass, .framebuffer = s_vk.framebuffer,
                                   .renderArea = { { 0, 0 }, { s_vk.width, s_vk.height } } };
     pvkCmdBeginRenderPass(s_vk.cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
-    pvkCmdBindPipeline(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vk_bind_pipeline(pipe);
     VkViewport vpt = { 0.0f, 0.0f, (float)s_vk.width, (float)s_vk.height, 0.0f, 1.0f };
     VkRect2D sc = { { 0, 0 }, { s_vk.width, s_vk.height } };
     pvkCmdSetViewport(s_vk.cmd, 0, 1, &vpt);
@@ -1730,7 +1760,7 @@ static void vk_draw(u32 prim, u32 first, u32 count)
                                   .renderPass = s_vk.render_pass, .framebuffer = s_vk.framebuffer,
                                   .renderArea = { { 0, 0 }, { s_vk.width, s_vk.height } } };
     pvkCmdBeginRenderPass(s_vk.cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
-    pvkCmdBindPipeline(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    vk_bind_pipeline(pipe);
     /* Whole target, as the null backend's ndc_to_px maps it. */
     VkViewport vp = { 0.0f, 0.0f, (float)s_vk.width, (float)s_vk.height, 0.0f, 1.0f };
     VkRect2D sc = { { 0, 0 }, { s_vk.width, s_vk.height } };
@@ -3500,6 +3530,7 @@ static void vk_eng_bind_vs_constants(void* user, const void* data, u32 bytes)
     u32 cap = (u32)s_g.ps_off;
     if (cap > sizeof s_vs_shadow) cap = sizeof s_vs_shadow;
     if (bytes > cap) { bytes = cap; if (!(s_e2.warned & 2u)) { VK_LOG("engine: VS constants truncated\n"); s_e2.warned |= 2u; } }
+    if (s_e2.vs_bytes == bytes && !memcmp(s_vs_shadow, data, bytes)) return;
     memcpy(s_vs_shadow, data, bytes);
     s_e2.vs_bytes = bytes;
     s_batch.vs_gen = 0;
@@ -3511,6 +3542,7 @@ static void vk_eng_bind_ps_constants(void* user, const void* data, u32 bytes)
     u32 cap = (u32)(s_g.ubo.size - s_g.ps_off);
     if (cap > sizeof s_ps_shadow) cap = sizeof s_ps_shadow;
     if (bytes > cap) { bytes = cap; if (!(s_e2.warned & 4u)) { VK_LOG("engine: PS constants truncated\n"); s_e2.warned |= 4u; } }
+    if (s_e2.ps_bytes == bytes && !memcmp(s_ps_shadow, data, bytes)) return;
     memcpy(s_ps_shadow, data, bytes);
     s_e2.ps_bytes = bytes;
     s_batch.ps_gen = 0;
@@ -3675,8 +3707,7 @@ static VkDescriptorSet vk_eng_write_descriptors(const vk_eng_pipe* P)
     if (split ? !s_e2.split_set : !s_g.set) return VK_NULL_HANDLE;   /* layouts not built */
     const VkImageView dummy_cube = split ? vk_eng_dummy_cube_view() : VK_NULL_HANDLE;
     if (split && !dummy_cube) return VK_NULL_HANDLE;
-    const VkDescriptorSet set = vk_batch_set(split ? s_e2.split_layout : s_g.set_layout);
-    if (!set) return VK_NULL_HANDLE;
+    VkDescriptorSet set = VK_NULL_HANDLE;
     VkDescriptorBufferInfo bi[2] = {
         { s_batch.buf.buf, s_batch.vs_off, s_e2.vs_bytes ? s_e2.vs_bytes : 16u },
         { s_batch.buf.buf, s_batch.ps_off, s_e2.ps_bytes ? s_e2.ps_bytes : 16u },
@@ -3726,7 +3757,25 @@ static VkDescriptorSet vk_eng_write_descriptors(const vk_eng_pipe* P)
             .dstBinding=RSX_SPIRV_SAMPLER_BINDING+16+u, .descriptorCount=1,
             .descriptorType=VK_DESCRIPTOR_TYPE_SAMPLER, .pImageInfo=&vs[u] };
     }
+    struct descriptor_key {
+        VkDescriptorBufferInfo buffers[2];
+        VkDescriptorImageInfo images[RSX_MAX_TEXTURES], samplers[RSX_MAX_TEXTURES];
+        VkDescriptorImageInfo vertex_images[RSX_MAX_VERTEX_TEXTURES], vertex_samplers[RSX_MAX_VERTEX_TEXTURES];
+        u32 cube_mask;
+    } key = {0};
+    memcpy(key.buffers, bi, sizeof bi);
+    memcpy(key.images, ii, sizeof ii); memcpy(key.samplers, si, sizeof si);
+    memcpy(key.vertex_images, vi, sizeof vi); memcpy(key.vertex_samplers, vs, sizeof vs);
+    key.cube_mask = P->cube_mask;
+    static struct descriptor_key last;
+    static u32 last_gen;
+    static VkDescriptorSet last_set;
+    if (last_set && last_gen == s_batch.gen && !memcmp(&key, &last, sizeof key)) return last_set;
+    set = vk_batch_set(split ? s_e2.split_layout : s_g.set_layout);
+    if (!set) return VK_NULL_HANDLE;
+    for (u32 i = 0; i < n; i++) w[i].dstSet = set;
     pvkUpdateDescriptorSets(s_vk.device, n, w, 0, NULL);
+    last = key; last_gen = s_batch.gen; last_set = set;
     return set;
 }
 
@@ -3783,16 +3832,25 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
     const VkDescriptorSet set = vk_eng_write_descriptors(P);
     if (!set) return;
 
-    if (vk_begin()) return;
-    /* Orders this draw after everything recorded before it, for the
-     * surfaces it touches. */
-    for (u32 i = 0; i < n; i++)
+    s_draw_begin = 1;
+    const int begin_rc = vk_begin();
+    s_draw_begin = 0;
+    if (begin_rc) return;
+    const int reuse_pass = s_open_pass == rp && s_open_fb == fb;
+    if (!reuse_pass) vk_close_engine_pass();
+    /* A new pass orders its attachments after earlier operations. Draws
+     * inside one pass retain Vulkan's rasterization order for blending and
+     * depth/stencil, without ending the pass and inserting a full barrier. */
+    if (!reuse_pass) for (u32 i = 0; i < n; i++)
         vk_barrier_image(s_eobj[s_eng_bound.rt[i]].im.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
     VkRenderPassBeginInfo rbi = { .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
                                   .renderPass = rp, .framebuffer = fb,
                                   .renderArea = { { 0, 0 }, { w, h } } };
-    pvkCmdBeginRenderPass(s_vk.cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
-    pvkCmdBindPipeline(s_vk.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+    if (!reuse_pass) {
+        pvkCmdBeginRenderPass(s_vk.cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+        s_open_pass = rp; s_open_fb = fb;
+    }
+    vk_bind_pipeline(pipe);
     VkViewport vp = { 0.0f, 0.0f, (float)w, (float)h, 0.0f, 1.0f };
     if (s_e2.have_vp && s_e2.vp[2] > 0.0f && s_e2.vp[3] > 0.0f) {
         vp.x = s_e2.vp[0]; vp.y = s_e2.vp[1]; vp.width = s_e2.vp[2]; vp.height = s_e2.vp[3];
@@ -3821,7 +3879,7 @@ static void vk_eng_draw(void* user, rsx_topology topology, const void* vertices,
     } else {
         pvkCmdDraw(s_vk.cmd, vertex_count, 1, 0, 0);
     }
-    pvkCmdEndRenderPass(s_vk.cmd);
+    if (!vk_merge_passes()) vk_close_engine_pass();
     vk_end_op();
 }
 

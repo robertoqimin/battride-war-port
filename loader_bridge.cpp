@@ -1476,6 +1476,22 @@ extern "C" const unsigned char* port_spu_coh_bitmap(void);
 extern "C" const int* port_spu_coh_armed(void);
 static const unsigned char* s_coh_bits = port_spu_coh_bitmap();
 static const int* s_coh_on = port_spu_coh_armed();
+/* Read-only after startup, except for the existing dynamic diagnostic gates.
+ * Selected generated TUs can check reservation metadata without extra calls. */
+extern "C" {
+const unsigned char* port_ppu_coh_bits = s_coh_bits;
+const int* port_ppu_coh_on = s_coh_on;
+int port_ppu_store_inline_ok = 0;
+}
+static struct PortStoreInlineInit {
+    PortStoreInlineInit() {
+#ifndef _WIN32
+        port_ppu_store_inline_ok = !(getenv("PPU_WVAL") || getenv("PPU_WWATCH") ||
+                                    getenv("PT") || getenv("PORT_PPU_MEMORY_SLOW"));
+#endif
+    }
+} s_port_store_inline_init;
+
 static inline int vm_coh_reserved(uint32_t a)
 {
     if (__builtin_expect(!__atomic_load_n(s_coh_on, __ATOMIC_RELAXED), 1)) return 0;

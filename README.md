@@ -20,6 +20,15 @@ This repository contains port code, configuration, tests, and instructions. **It
 
 The long gameplay session used a six-second PAMF replacement solely to speed up the introduction. Original assets were not modified; the normal launcher still uses the original video. The entire sequence with that video was not repeated during the latest gameplay validation.
 
+## Performance tuning
+
+The local tuning work adds exact SIMD vertex decoding, reuse of Vulkan constant
+buffers and descriptors, cached pipeline binds, and grouping of adjacent draws
+with the same attachments. A profiled PPU translation unit can be built with
+O3 without changing the whole program's optimization level. See
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md) for measurements, frame interval
+reports, comparison switches, and experimental GCC PGO support.
+
 ## Setup and build
 
 Follow [docs/BUILD.md](docs/BUILD.md) for Fedora dependencies, the pinned SDK revision, data layout, EBOOT hash, PPU/SPU generation, and patch application.
@@ -43,6 +52,8 @@ Generation refuses to overwrite existing results. Expect about 593 MiB of PPU so
 - `sail_bridge.cpp`, `sail_decoder.hpp`, `sail_audio.hpp`: PAMF callbacks, video, and audio. See [README_SAIL.md](README_SAIL.md).
 - `audio_bridge.c`, `fs_bridge.cpp`: local extensions to SDK audio and VFS.
 - `gcm_bridge.c`, `rsx_engine_bridge.c`, `vulkan_bridge.c`, `loader_bridge.cpp`: local adaptations of SDK implementations; the official checkout remains separate.
+- `include/port_ppu_memory.h`: guarded inline memory access in selected hot PPU chunks; reserved SPU lines and diagnostics retain the original accessors.
+- `rsx_vertex_bridge.c`: exact SIMD paths for common four-component vertex formats.
 - `stubs.cpp`: game HLE adapters, blocking `sys_lwcond`, and the optional graphics buffer expansion.
 - `patches/graphics-command-buffer-init.patch`: minimal integration call to apply after PPU generation.
 

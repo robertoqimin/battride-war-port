@@ -14,6 +14,7 @@ The project started from the PS3Recomp template. `CMakeLists.txt`, `config.toml`
 | `loader_bridge.cpp` | `runtime/ppu/ppu_loader.cpp` |
 | `gcm_bridge.c` | `libs/video/cellGcmSys.c` |
 | `rsx_engine_bridge.c` | `libs/video/rsx_draw_engine.c` |
+| `rsx_vertex_bridge.c` | `libs/video/rsx_vertex_compact.c` |
 | `vulkan_bridge.c` | `libs/video/rsx_vulkan_backend.c` |
 | `spu_interp_bridge.c` | `runtime/spu/spu_interp.c` |
 
