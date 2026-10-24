@@ -363,10 +363,11 @@ static void port_pad_get_data(ppu_context* c)
 /* PORT_PROFILE=<file>: CPU-time sampling profiler that does not stop the
  * game (a debugger attach pauses every thread). A process CPU-time timer
  * raises SIGPROF about PORT_PROFILE_HZ times a second (default 1000); the
- * thread that was running records its id, instruction pointer and the word
- * on top of its stack (the caller's return address while a leaf such as a
- * memory accessor has not pushed anything yet), and a helper thread appends
- * "<tid> <hex rip> <hex top-of-stack>" lines to the file every second.
+ * thread that was running records its id, instruction pointer and the first
+ * of the top 32 stack words that points into the executable's code (usually
+ * the caller's return address, also from inside libc or the vDSO), and a
+ * helper thread appends "<tid> <hex rip> <hex caller>" lines to the file
+ * every second (caller 0 when none was found).
  * Symbolise with nm/addr2line against the (non-PIE) executable. */
 #include <csignal>
 #include <ctime>
@@ -379,6 +380,7 @@ struct ProfSample { uint32_t tid; uint64_t rip, tos; };
 constexpr uint32_t kProfRing = 1u << 20;
 ProfSample* s_prof_ring;
 std::atomic<uint32_t> s_prof_head{0};
+uintptr_t s_prof_text_lo, s_prof_text_hi;
 void port_prof_signal(int, siginfo_t*, void* uc_)
 {
     const ucontext_t* uc = static_cast<const ucontext_t*>(uc_);
@@ -386,7 +388,10 @@ void port_prof_signal(int, siginfo_t*, void* uc_)
     ProfSample& s = s_prof_ring[i & (kProfRing - 1)];
     s.tid = (uint32_t)syscall(SYS_gettid);
     s.rip = (uint64_t)uc->uc_mcontext.gregs[REG_RIP];
-    s.tos = *(const uint64_t*)uc->uc_mcontext.gregs[REG_RSP];
+    const uint64_t* sp = (const uint64_t*)uc->uc_mcontext.gregs[REG_RSP];
+    s.tos = 0;
+    for (int k = 0; k < 32; k++)
+        if (sp[k] >= s_prof_text_lo && sp[k] < s_prof_text_hi) { s.tos = sp[k]; break; }
 }
 }
 extern "C" void port_profiler_start(void)
@@ -394,6 +399,8 @@ extern "C" void port_profiler_start(void)
     const char* path = std::getenv("PORT_PROFILE");
     if (!path || !*path) return;
     s_prof_ring = new ProfSample[kProfRing]();
+    extern char __executable_start[], etext[];
+    s_prof_text_lo = (uintptr_t)__executable_start; s_prof_text_hi = (uintptr_t)etext;
     struct sigaction sa = {};
     sa.sa_sigaction = port_prof_signal;
     sa.sa_flags = SA_SIGINFO | SA_RESTART;

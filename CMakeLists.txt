@@ -112,6 +112,17 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/audio_bridge.c" TARGET_DIRECTORY ps3recomp_runtime PROPERTIES COMPILE_DEFINITIONS "PORT_AUDIO_SOURCE=\"${PS3RECOMP_DIR}/libs/audio/cellAudio.c\"")
 endif()
 
+# Guest lwmutex locks wait on Win32-style semaphores; skip the clock reads a
+# zero-timeout wait on them does not need (sync_bridge.c).
+if(NOT WIN32)
+    get_target_property(PORT_SYNC_SOURCES ps3recomp_runtime SOURCES)
+    list(FILTER PORT_SYNC_SOURCES EXCLUDE REGEX "runtime/platform/win32_compat\\.c$")
+    set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${PORT_SYNC_SOURCES}")
+    target_sources(ps3recomp_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/sync_bridge.c")
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/sync_bridge.c" TARGET_DIRECTORY ps3recomp_runtime
+        PROPERTIES COMPILE_DEFINITIONS "PORT_WIN32_COMPAT_SOURCE=\"${PS3RECOMP_DIR}/runtime/platform/win32_compat.c\"")
+endif()
+
 # The synchronous renderer must not skip FIFO flip boundaries.
 get_target_property(PORT_GCM_SOURCES ps3recomp_runtime SOURCES)
 list(FILTER PORT_GCM_SOURCES EXCLUDE REGEX "libs/video/cellGcmSys\\.c$")

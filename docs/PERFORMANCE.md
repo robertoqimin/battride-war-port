@@ -47,6 +47,24 @@ alternating runs): code huge pages 50.8 fps against 49.9 without (three and
 five runs), within run-to-run noise. Huge pages for the guest memory arena were
 tried and rejected: 45.7 fps over six runs, with twice the frames over 33 ms.
 
+## Guest lwmutex waits
+
+Every guest `sys_lwmutex_lock`/`trylock` starts with a zero-timeout
+`WaitForSingleObject` on the mutex's semaphore. The SDK's Win32 layer read the
+monotonic clock twice per call, though only waitable timers depend on it; in
+crowded combat the `[vdso]` clock reads were about 6.5% of the busy PPU thread.
+`sync_bridge.c` compiles the SDK's `win32_compat.c` unchanged except for that
+function, which now reads the clock only for timers and bounded waits.
+
+Measured in STG02 combat on a Ryzen 5 4600H, four alternating runs each: 46.6
+against 46.4 fps average, p95 28.7 against 30.2 ms, frames over 33 ms 17
+against 52 (ranges 10-23 and 43-61), worst five seconds 35.0 against 32.3 fps.
+The average barely moves; the dips in the busiest moments shrink.
+
+The audio SPU thread (about 45% of a core) is not the limit on that machine:
+its interpreted remainder was 1.2% of its samples, so translating the last
+interpreted entries was not pursued.
+
 ## Vulkan changes
 
 - Identical VS/PS constant blocks retain their batch UBO slice.
