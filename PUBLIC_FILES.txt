@@ -57,6 +57,10 @@ tests/test_vmx_simd.cpp
 tests/test_vmx_simd.sh
 vulkan_bridge.c
 docs/APPIMAGE.md
+packaging/build-image/Containerfile
+packaging/glslang-compat/glslangConfig.cmake
+packaging/glslang-compat/include/glslang/Public/ResourceLimits.h
+packaging/graphics_probe.c
 packaging/importer.py
 packaging/launcher.py
 scripts/build_appimage.py

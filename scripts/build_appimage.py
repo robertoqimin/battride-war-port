@@ -35,11 +35,16 @@ def sha(p):
 
 # These libraries must match the host's GPU driver. Never ship a second libc,
 # dynamic loader, C++ runtime, Vulkan/GL loader, DRM or LLVM/SPIRV implementation.
+# The X11/xcb/Wayland entries are the ones Mesa and NVIDIA's GLX/EGL link; other
+# toolkit helpers (GLEW, GLU, xcb-util, xkbcommon) are not on every host and ship.
 def host_library(name):
     return (name.startswith(('ld-linux','libc.so','libm.so','libpthread.so','libdl.so','librt.so',
             'libresolv.so','libnss_','libutil.so','libanl.so','libstdc++','libgcc_s','libatomic.so',
-            'libvulkan','libGL','libEGL','libOpenGL','libdrm','libgbm','libLLVM','libSPIRV',
-            'libudev','libX','libxcb','libwayland','libxkbcommon','libexpat','libelf','libz.so','libzstd')))
+            'libvulkan','libGL.so','libGLX','libGLdispatch','libglapi','libEGL','libOpenGL',
+            'libdrm','libgbm','libLLVM','libSPIRV','libudev','libexpat','libelf','libz.so','libzstd',
+            'libX11.so','libX11-xcb','libXau','libXdmcp','libXext','libXfixes','libXxf86vm','libxshmfence',
+            'libxcb.so','libxcb-dri2','libxcb-dri3','libxcb-present','libxcb-sync','libxcb-xfixes',
+            'libxcb-randr','libxcb-shm','libxcb-glx','libwayland-client','libwayland-server','libwayland-egl')))
 
 for d in ('app','usr/bin','usr/lib','usr/share/glib-2.0/schemas'):(S/d).mkdir(parents=True,exist_ok=True)
 for n in ('importer.py','launcher.py'):copy(P/'packaging'/n,S/'app'/n)
@@ -61,7 +66,7 @@ for p in list((S/'usr/rpcs3/usr/lib').glob('*')):
     if host_library(p.name) and (p.is_file() or p.is_symlink()):p.unlink()
 copy(args.sevenzip_dir/'7zz',S/'usr/bin/7z');copy(args.sevenzip_dir/'License.txt',S/'usr/share/licenses/7zip/License.txt')
 for n in ('ffmpeg','ffprobe'):copy('/usr/bin/'+n,S/'usr/bin'/n)
-subprocess.run(['cc','-O2','-march=x86-64','-msse4.1',str(P/'packaging/graphics_probe.c'),'-o',str(S/'usr/bin/graphics-probe'),*subprocess.check_output(['pkg-config','--cflags','--libs','sdl2','vulkan'],text=True).split()],check=True)
+subprocess.run(['cc','-O2','-march=x86-64-v3',str(P/'packaging/graphics_probe.c'),'-o',str(S/'usr/bin/graphics-probe'),*subprocess.check_output(['pkg-config','--cflags','--libs','sdl2','vulkan'],text=True).split()],check=True)
 seeds=[]
 libdir=Path('/usr/lib/x86_64-linux-gnu')
 for pattern in ('libgtk-3.so.0','libgdk-3.so.0','libgirepository-1.0.so.1','libpulse.so.0','libasound.so.2','libdecor-0.so.0'):
@@ -94,7 +99,7 @@ for p in sorted((P/'game/PS3_GAME').rglob('*')):
 p=P/'game/PS3_DISC.SFB'
 if p.exists():manifest['PS3_DISC.SFB']={'size':p.stat().st_size,'sha256':sha(p)}
 (S/'app/disc-manifest.json').write_text(json.dumps(manifest,separators=(',',':')))
-meta={'version':'0.2.0','glibc_min':'2.35','cpu':'x86_64 / SSE4.1; no AVX requirement','elf_sha256':'a53b7bca5d47490710ba02af5f885e1219d10c7a1a456fcf6e13a48db668a014',
+meta={'version':'0.2.0','glibc_min':'2.35','cpu':'x86-64-v3 / AVX2 FMA BMI2','elf_sha256':'a53b7bca5d47490710ba02af5f885e1219d10c7a1a456fcf6e13a48db668a014',
       'codecs':{p.name:sha(p) for p in (P/'firmware/dev_flash/sys/external').glob('*.pic')},'runner_sha256':sha(args.runner),'sevenzip_sha256':sha(S/'usr/bin/7z'),'runtime_sha256':sha(args.runtime)}
 (S/'app/package.json').write_text(json.dumps(meta,indent=2));(S/'app/library-sources.json').write_text(json.dumps(bom,indent=2))
 (S/'AppRun').write_text('''#!/bin/sh

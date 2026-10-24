@@ -22,9 +22,9 @@ def cpu_check():
                 break
     except OSError:
         pass
-    missing = {'ssse3', 'sse4_1'} - flags
+    missing = {'avx', 'avx2', 'fma', 'bmi1', 'bmi2', 'f16c', 'movbe', 'abm'} - flags
     if missing:
-        raise ImportError('This build needs an x86_64 CPU with SSE4.1 (Ryzen 7 5700X is supported). Missing: ' + ', '.join(sorted(missing)))
+        raise ImportError('This build needs an x86-64-v3 CPU with AVX2/FMA (Intel Haswell, AMD Excavator/Ryzen or newer). Missing: ' + ', '.join(sorted(missing)))
 
 
 def main():
@@ -44,7 +44,7 @@ def main():
         if code or 'Codec Load Error' in formats or 'Udf' not in formats:
             raise ImportError('Bundled ISO reader is missing UDF format support.')
         print(json.dumps({'status': 'OK', 'title_id': 'BLJS10220', 'files': len(package.manifest),
-                          'cpu': 'x86_64 / SSE4.1', 'elf_sha256': package.meta['elf_sha256']}, indent=2))
+                          'cpu': 'x86-64-v3 / AVX2 FMA', 'elf_sha256': package.meta['elf_sha256']}, indent=2))
         return
     default_data = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')) / 'battride-war-port'
     data = (args.data_dir or default_data).resolve()
@@ -107,7 +107,7 @@ def main():
             actions.pack_start(self.start, False, False, 0);actions.pack_start(self.stop, False, False, 0)
             box.pack_start(actions, False, False, 0)
             self.progress = Gtk.ProgressBar();box.pack_start(self.progress, False, False, 0)
-            self.status = Gtk.Label(label='Ready. Requires a Vulkan-capable GPU and an x86_64/SSE4.1 CPU.', xalign=0)
+            self.status = Gtk.Label(label='Ready. Requires a Vulkan-capable GPU and an AVX2/FMA (x86-64-v3) CPU.', xalign=0)
             self.status.set_line_wrap(True);box.pack_start(self.status, False, False, 0)
             self.stats = Gtk.Label(label='', xalign=0);box.pack_start(self.stats, False, False, 0)
             GLib.timeout_add(1000, self.tick)

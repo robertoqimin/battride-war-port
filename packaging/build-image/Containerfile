@@ -1,0 +1,9 @@
+# Build image for the portable AppImage. glibc 2.35 is the compatibility floor.
+#   podman build -t battride-build:ubuntu22.04 packaging/build-image
+FROM docker.io/library/ubuntu:22.04
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        build-essential clang cmake ninja-build pkg-config libsdl2-dev \
+        glslang-dev glslang-tools spirv-tools libvulkan-dev vulkan-tools \
+        python3 python3-gi python3-cairo gir1.2-gtk-3.0 ffmpeg squashfs-tools \
+        ca-certificates patchelf \
+    && rm -rf /var/lib/apt/lists/*

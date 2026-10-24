@@ -22,19 +22,19 @@ The long gameplay session used a six-second PAMF replacement solely to speed up 
 
 ## System requirements (portable AppImage)
 
-Only one system has been tested: Fedora, Ryzen 7 5700X, GTX 1650. Everything below meets the checks in `packaging/launcher.py`, `packaging/graphics_probe.c` and the Vulkan backend, but has not been run.
+Only one system has been tested: Fedora on a laptop with a Ryzen 5 4600H and GTX 1650 (Radeon integrated graphics alongside; the backend picks the discrete GPU). Everything below meets the checks in `packaging/launcher.py`, `packaging/graphics_probe.c` and the Vulkan backend, but has not been run.
 
-**CPU:** x86_64 with SSSE3 and SSE4.1 (the portable runner is built with `PORT_PORTABLE=ON`, `-march=x86-64 -msse4.1`; no AVX is required).
+**CPU:** x86-64-v3: AVX2, FMA, BMI1/BMI2, F16C, MOVBE and LZCNT (the portable runner is built with `PORT_PORTABLE=ON`, `-march=x86-64-v3`; the launcher refuses CPUs without these).
 
 | Supported | Not supported |
 |---|---|
-| Intel Core 2 45 nm (Penryn/Wolfdale/Yorkfield) and newer | Intel Core 2 65 nm (Conroe/Merom): no SSE4.1 |
-| Every Intel Core i3/i5/i7/i9 generation, Xeon from Nehalem | Intel Atom Bonnell/Saltwell (Silvermont and newer are fine) |
-| Intel Pentium/Celeron from Silvermont/Goldmont, N100/N200 | AMD Athlon 64, Phenom, Phenom II (K8/K10): SSE4a only |
-| AMD FX (Bulldozer/Piledriver), A-series APUs, Jaguar | ARM and RISC-V |
+| Intel Core 4th gen (Haswell, 2013) and newer: every i3/i5/i7/i9 and Core Ultra from then on | Intel Core 2nd/3rd gen (Sandy/Ivy Bridge: AVX without AVX2) and older |
+| Intel Xeon E3/E5/E7 v3 and newer, Xeon Scalable | Intel Pentium/Celeron/Atom before Tiger Lake, including Goldmont and Jasper Lake |
+| Intel Pentium Gold 7505 (Tiger Lake), N100/N200/N-series and Core i3-N (Alder Lake-N) | AMD FX (Bulldozer/Piledriver), Steamroller APUs, Jaguar/Puma, Phenom and older |
+| AMD Excavator (Carrizo/Bristol Ridge APUs, Athlon X4 9xx) | ARM and RISC-V |
 | Every AMD Ryzen, Threadripper and EPYC generation | |
 
-The 30 fps figures above were measured with a Zen 2 AVX2 build whose render thread was already close to saturation; the generic build is expected to be slower in combat. CPUs below a Ryzen 5 3600 / 8th-gen Core i5 will likely run under 30 fps.
+The 30 fps figures above were measured on that Ryzen 5 4600H with a Zen 2 AVX2 build whose render thread was already close to saturation. CPUs with lower single-thread performance than a 4600H will likely run under 30 fps in combat.
 
 **GPU:** Vulkan 1.0 with a graphics queue that can present to the window, `VK_KHR_swapchain` and `textureCompressionBC` (PS3 DXT textures). The launcher's graphics check rejects devices without BC textures.
 

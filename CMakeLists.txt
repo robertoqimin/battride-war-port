@@ -85,13 +85,12 @@ if(PORT_MARCH AND CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
     message(STATUS "Target CPU:      -march=${PORT_MARCH}")
 endif()
 
-# Portable distribution: generic CPU and hidden static shader-tool symbols.
-option(PORT_PORTABLE "Build a generic x86_64 AppImage runner" OFF)
+# Portable distribution: x86-64-v3 (AVX2/FMA) CPU and hidden static shader-tool symbols.
+option(PORT_PORTABLE "Build an x86-64-v3 AppImage runner" OFF)
 if(PORT_PORTABLE)
-    if(NOT PORT_MARCH STREQUAL "x86-64")
-        message(FATAL_ERROR "PORT_PORTABLE requires -DPORT_MARCH=x86-64")
+    if(NOT PORT_MARCH STREQUAL "x86-64-v3")
+        message(FATAL_ERROR "PORT_PORTABLE requires -DPORT_MARCH=x86-64-v3")
     endif()
-    add_compile_options(-msse4.1)
     add_link_options("LINKER:--exclude-libs,ALL")
 endif()
 
