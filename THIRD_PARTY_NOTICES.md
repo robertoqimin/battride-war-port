@@ -38,7 +38,7 @@ The AppImage (see [docs/APPIMAGE.md](docs/APPIMAGE.md)) contains no game code or
 - 7-Zip 26.03 (`usr/bin/7z`; LGPL-2.1 with the unRAR restriction; `usr/share/licenses/7zip/License.txt`);
 - the AppImage type2 runtime (MIT) at the commit used, and the libfuse 3.15.0 (LGPL-2.1) and squashfuse 0.5.2 (BSD-2-Clause) sources its build links statically.
 
-Each Ubuntu package's copyright file is also retained inside the AppImage under `usr/share/licenses/build-packages/`. These binaries are redistributed unmodified; the source is offered for at least as long as the release that carries them stays published.
+Each Ubuntu package's copyright file is also retained inside the AppImage under `usr/share/licenses/build-packages/`. These binaries are redistributed as Ubuntu built them, except that `patchelf` sets the RPATH of some executables and libraries (the toolchain, Python, FFmpeg, libpulse) so they find the bundled libraries without `LD_LIBRARY_PATH`; no code is changed. The source is offered for at least as long as the release that carries them stays published.
 
 The port's own code (MIT) and the ps3recomp SDK at the pinned commit (MIT, including the LGPL-2.1-or-later ATRAC3 decoder in `third_party/at3_standalone`) are inside the AppImage in source form, under `usr/share/battride/`.
 

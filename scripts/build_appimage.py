@@ -87,7 +87,7 @@ copytree('/usr/lib/x86_64-linux-gnu/girepository-1.0',S/'usr/lib/girepository-1.
 copy('/usr/share/glib-2.0/schemas/gschemas.compiled',S/'usr/share/glib-2.0/schemas/gschemas.compiled')
 copy(args.sevenzip_dir/'7zz',S/'usr/bin/7z');copy(args.sevenzip_dir/'License.txt',S/'usr/share/licenses/7zip/License.txt')
 for n in ('ffmpeg','ffprobe'):copy('/usr/bin/'+n,S/'usr/bin'/n)
-subprocess.run(['cc','-O2','-march=x86-64','-msse4.1',str(P/'packaging/graphics_probe.c'),'-o',str(S/'usr/bin/graphics-probe'),*subprocess.check_output(['pkg-config','--cflags','--libs','sdl2','vulkan'],text=True).split()],check=True)
+subprocess.run(['cc','-O2','-march=x86-64','-msse4.1','-Wl,--disable-new-dtags,-rpath,$ORIGIN/../lib',str(P/'packaging/graphics_probe.c'),'-o',str(S/'usr/bin/graphics-probe'),*subprocess.check_output(['pkg-config','--cflags','--libs','sdl2','vulkan'],text=True).split()],check=True)
 seeds=[]
 libdir=Path('/usr/lib/x86_64-linux-gnu')
 for pattern in ('libgtk-3.so.0','libgdk-3.so.0','libgirepository-1.0.so.1','libpulse.so.0','libasound.so.2','libdecor-0.so.0'):
@@ -113,6 +113,20 @@ while queue:
         match=re.search(r'=> (/\S+)',line) or re.match(r'\s*(/\S+)',line)
         if match and Path(match[1]).exists():queue.append(Path(match[1]))
         elif 'not found' in line:missing.add(line.strip())
+# No LD_LIBRARY_PATH: it would leak these libraries into host programs started
+# from here (on Arch, /bin/sh is bash linked against a newer readline). Bundled
+# executables carry a relative DT_RPATH, which the libraries they load inherit.
+for n in ('python3','ffmpeg','ffprobe'):
+    subprocess.run(['patchelf','--force-rpath','--set-rpath','$ORIGIN/../lib',str(S/'usr/bin'/n)],check=True)
+# A bundled library with its own RUNPATH (libpulse points at Ubuntu's
+# pulseaudio directory) would not see that RPATH; its dependencies sit beside it.
+for p in (S/'usr/lib').iterdir():
+    if p.is_file() and not p.is_symlink() and '.so' in p.name and 'RUNPATH' in subprocess.run(['readelf','-d',str(p)],capture_output=True,text=True).stdout:
+        subprocess.run(['patchelf','--force-rpath','--set-rpath','$ORIGIN',str(p)],check=True)
+# SDL2 and the libraries it needs from this AppImage; the launcher copies them
+# next to the game it builds, which finds them through its own $ORIGIN RPATH.
+out=subprocess.run(['ldd',str(S/'usr/lib/libSDL2-2.0.so.0')],capture_output=True,text=True,env=dict(os.environ,LD_LIBRARY_PATH=str(S/'usr/lib'))).stdout
+game_libs=['libSDL2-2.0.so.0']+sorted({Path(m[1]).name for m in re.finditer(r'=> (\S+)',out) if m[1].startswith(str(S/'usr/lib'))})
 # Record unresolved imports for review; none are expected.
 (S/'app/unresolved-build-libraries.txt').write_text('\n'.join(sorted(missing)))
 manifest={}
@@ -121,9 +135,9 @@ for p in sorted((P/'game/PS3_GAME').rglob('*')):
 p=P/'game/PS3_DISC.SFB'
 if p.exists():manifest['PS3_DISC.SFB']={'size':p.stat().st_size,'sha256':sha(p)}
 (S/'app/disc-manifest.json').write_text(json.dumps(manifest,separators=(',',':')))
-meta={'version':'0.3.1','glibc_min':'2.35','cpu':'built on the player computer, -march=native','elf_sha256':spec['eboot_sha256'],
+meta={'version':'0.3.2','glibc_min':'2.35','cpu':'built on the player computer, -march=native','elf_sha256':spec['eboot_sha256'],
       'sdk_commit':spec['sdk_commit'],'rpcs3':json.loads((P/'packaging/rpcs3.json').read_text()),'codecs':{p.name:sha(p) for p in (P/'firmware/dev_flash/sys/external').glob('*.pic')},
-      'sevenzip_sha256':sha(S/'usr/bin/7z'),'runtime_sha256':sha(args.runtime)}
+      'game_libs':game_libs,'sevenzip_sha256':sha(S/'usr/bin/7z'),'runtime_sha256':sha(args.runtime)}
 (S/'app/package.json').write_text(json.dumps(meta,indent=2));(S/'app/library-sources.json').write_text(json.dumps(bom,indent=2))
 # Exact Ubuntu package versions in the build image, for the corresponding sources.
 system_files.update(appimage_toolchain.COPIED)
@@ -135,8 +149,8 @@ export PORT_APPDIR="$APPDIR" PYTHONHOME="$APPDIR/usr" PYTHONPLATLIBDIR=lib
 export PYTHONPATH="$APPDIR/app:$APPDIR/usr/lib/python'''+version+'''/site-packages" PYTHONDONTWRITEBYTECODE=1
 export GI_TYPELIB_PATH="$APPDIR/usr/lib/girepository-1.0" GSETTINGS_SCHEMA_DIR="$APPDIR/usr/share/glib-2.0/schemas"
 export GSETTINGS_BACKEND=memory GIO_USE_VFS=local GIO_MODULE_DIR="$APPDIR/usr/lib/gio/modules"
-export LD_LIBRARY_PATH="$APPDIR/usr/lib" PATH="$APPDIR/usr/bin:$PATH"
-unset LD_PRELOAD
+export PATH="$APPDIR/usr/bin:$PATH"
+unset LD_LIBRARY_PATH LD_PRELOAD
 ulimit -c 0
 exec "$APPDIR/usr/bin/python3" "$APPDIR/app/launcher.py" "$@"
 ''');(S/'AppRun').chmod(0o755)

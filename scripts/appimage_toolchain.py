@@ -19,7 +19,7 @@ PACKAGES = (
     'linux-libc-dev', 'libcrypt-dev', 'libcrypt1', 'libgcc-s1', 'libstdc++6',
     'binutils', 'binutils-x86-64-linux-gnu', 'binutils-common', 'libbinutils', 'libctf0', 'libctf-nobfd0',
     'clang-14', 'libclang-common-14-dev', 'libclang-cpp14', 'libllvm14',
-    'cmake', 'cmake-data', 'ninja-build', 'patch', 'pkg-config',
+    'cmake', 'cmake-data', 'ninja-build', 'patch', 'patchelf', 'pkg-config',
     'libsdl2-dev', 'libsdl2-2.0-0', 'libvulkan-dev', 'glslang-dev', 'spirv-tools',
 )
 SKIP = ('usr/share/doc/', 'usr/share/man/', 'usr/share/info/', 'usr/share/locale/', 'usr/share/lintian/',
@@ -32,7 +32,7 @@ TOOLS = ('usr/bin/x86_64-linux-gnu-gcc-11', 'usr/bin/x86_64-linux-gnu-g++-11', '
          'usr/lib/gcc/x86_64-linux-gnu/11/collect2', 'usr/lib/gcc/x86_64-linux-gnu/11/lto-wrapper',
          'usr/lib/gcc/x86_64-linux-gnu/11/liblto_plugin.so', 'usr/bin/x86_64-linux-gnu-as',
          'usr/bin/x86_64-linux-gnu-ld.bfd', 'usr/bin/x86_64-linux-gnu-ar', 'usr/bin/x86_64-linux-gnu-ranlib',
-         'usr/bin/cmake', 'usr/bin/ninja', 'usr/bin/patch', 'usr/bin/x86_64-linux-gnu-pkg-config')
+         'usr/bin/cmake', 'usr/bin/ninja', 'usr/bin/patch', 'usr/bin/patchelf', 'usr/bin/x86_64-linux-gnu-pkg-config')
 # Only glibc and the C++ runtime come from the host for tool processes; the
 # tools' other libraries (LLVM 14 included, under its own soname) are private.
 SYSTEM = ('ld-linux', 'libc.so', 'libm.so', 'libpthread.so', 'libdl.so', 'librt.so', 'libresolv.so',
@@ -102,6 +102,26 @@ def assemble(dest):
         name = os.path.basename(lib)
         if not name.startswith(SYSTEM):
             (runtime / name).symlink_to(os.path.relpath(placed(root, lib), runtime))
+    # Tools find runtime/ through a relative DT_RPATH (inherited by the libraries
+    # they load), never LD_LIBRARY_PATH: that would leak these libraries into the
+    # host programs the build starts, such as /bin/sh, which on Arch is bash
+    # linked against the host's newer readline.
+    for tool in TOOLS:
+        path = os.path.realpath(placed(root, '/' + tool))
+        if not os.path.isfile(path):
+            continue
+        with open(path, 'rb') as f:
+            if f.read(4) != b'\x7fELF':
+                continue  # e.g. the pkg-config wrapper script
+        rpath = '$ORIGIN/' + os.path.relpath(runtime, os.path.dirname(path))
+        subprocess.run(['patchelf', '--force-rpath', '--set-rpath', rpath, path], check=True)
+    # A library with its own RUNPATH (LLVM's $ORIGIN/../lib) does not see the
+    # executable's RPATH for its dependencies; point it at runtime/ too.
+    for link in runtime.iterdir():
+        path = os.path.realpath(link)
+        if 'RUNPATH' in subprocess.run(['readelf', '-d', path], capture_output=True, text=True).stdout:
+            rpath = '$ORIGIN/' + os.path.relpath(runtime, os.path.dirname(path))
+            subprocess.run(['patchelf', '--force-rpath', '--set-rpath', rpath, path], check=True)
     # Some Ubuntu package configs hardcode /usr (SDL2's prefix, SPIRV-Tools'
     # librt.a). Inside the sysroot they must follow CMAKE_SYSROOT, or the game
     # would compile against host headers or fail to find libraries.

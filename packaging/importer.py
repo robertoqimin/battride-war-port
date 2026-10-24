@@ -60,7 +60,7 @@ def download(url, dest, expected_sha256, expected_size, cancelled, status=lambda
 
 
 # Bump when the local build recipe changes, so existing runners are rebuilt.
-BUILD_RECIPE = 1
+BUILD_RECIPE = 2
 # Peak memory of one compiler job on the largest generated PPU chunk, rounded up.
 BUILD_JOB_MEMORY = 2 * 1024**3
 
@@ -344,7 +344,12 @@ class Package:
             shutil.rmtree(stage, ignore_errors=True)
 
     def build_env(self, data):
-        """Environment for translating and compiling with the bundled toolchain only."""
+        """Environment for translating and compiling with the bundled toolchain only.
+
+        No LD_LIBRARY_PATH: the bundled tools find their libraries through their
+        own RPATH, and host programs the build starts (ninja runs /bin/sh) must
+        keep using the host's libraries.
+        """
         env = os.environ.copy()
         for key in list(env):
             if key.startswith(('APPIMAGE', 'PYTHON', 'GI_', 'GTK_', 'GDK_', 'QT_', 'CMAKE_', 'PKG_CONFIG',
@@ -356,7 +361,6 @@ class Package:
         toolchain = self.root / 'usr/toolchain'
         env['PATH'] = os.pathsep.join([str(toolchain / 'sysroot/usr/bin'), str(self.root / 'usr/bin'),
                                        env.get('PATH', '/usr/bin:/bin')])
-        env['LD_LIBRARY_PATH'] = str(toolchain / 'runtime') + ':' + str(self.root / 'usr/lib')
         env.update(PYTHONHOME=str(self.root / 'usr'), PYTHONPLATLIBDIR='lib', PYTHONDONTWRITEBYTECODE='1',
                    LC_ALL='C.UTF-8', PS3_DEV_FLASH=str(Path(data) / 'firmware/dev_flash'))
         return env
@@ -434,9 +438,19 @@ class Package:
             if code:
                 raise ImportError('Compiling the game failed. See build.log.')
             out = data / 'runner'
-            out.mkdir(exist_ok=True)
+            shutil.rmtree(out / 'lib', ignore_errors=True)
+            (out / 'lib').mkdir(parents=True)
+            for name in self.meta['game_libs']:
+                shutil.copy2(self.root / 'usr/lib' / name, out / 'lib' / name)
             tmp = out / 'game-runner.tmp'
             shutil.copy2(build / 'kamenriderbattridewarsport', tmp)
+            # The game finds SDL2 and its bundled libraries in lib/ next to it.
+            # Set exactly this DT_RPATH (inherited by SDL2's own dependencies);
+            # CMake's build RPATH would add an empty entry, i.e. the current directory.
+            code, _ = runner.run([self.root / 'usr/toolchain/sysroot/usr/bin/patchelf', '--force-rpath',
+                                  '--set-rpath', '$ORIGIN/lib', tmp], env=env, log=log)
+            if code:
+                raise ImportError('Could not finish the game executable. See build.log.')
             tmp.replace(out / 'game-runner')
             (out / 'build.json').write_text(json.dumps(self.build_identity(), indent=2))
             status('Game built for this computer.')
@@ -452,7 +466,7 @@ class Package:
             if k.startswith(('PAD_', 'PORT_', 'PPU_', 'SPU_', 'YDKJ_', 'GCM_', 'RSX_')) or k in (
                     'LD_LIBRARY_PATH', 'LD_PRELOAD', 'PS3_VFS_ROOT', 'PS3_GAMEDATA_ROOT', 'PS3_DEV_FLASH'):
                 env.pop(k, None)
-        env['LD_LIBRARY_PATH'] = str(self.root / 'usr/lib')
+        # The game finds its libraries through its RPATH (runner/lib).
         env.setdefault('VK_LOADER_DEBUG', 'error,warn')
         env.update(PS3_VFS_ROOT=str(data / 'game'), PS3_GAMEDATA_ROOT=str(data / 'gamedata'),
                    PS3_DEV_FLASH=str(data / 'firmware/dev_flash'), PS3RECOMP_VK_GUEST_PROGRAMS='1',
