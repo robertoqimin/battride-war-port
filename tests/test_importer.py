@@ -27,8 +27,20 @@ class ImporterTests(unittest.TestCase):
             class FakeRunner:
                 cancelled=threading.Event()
                 def run(self,*a,**kw):return 2,'ERROR: invalid archive'
-            with self.assertRaises(m.ImportError):m.Package(root).import_iso(iso,data,FakeRunner())
+            with self.assertRaisesRegex(m.ImportError, 'Could not read the ISO filesystem'):m.Package(root).import_iso(iso,data,FakeRunner())
             self.assertEqual(list(data.iterdir()),[])
+    def test_missing_codec_is_not_reported_as_wrong_game(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'app').mkdir()
+            (root/'app/package.json').write_text('{}');(root/'app/disc-manifest.json').write_text('{}')
+            iso=root/'game.iso';iso.write_bytes(b'iso');data=root/'data'
+            class FakeRunner:
+                cancelled=threading.Event()
+                def run(self,*a,**kw):return 2,'Codec Load Error: /usr/libexec/7zip/7z.so'
+            with self.assertRaisesRegex(m.ImportError, 'bundled ISO reader'):
+                m.Package(root).import_iso(iso,data,FakeRunner())
+            self.assertEqual(list(data.iterdir()),[])
+
     def test_existing_import_preserved(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);(root/'app').mkdir()

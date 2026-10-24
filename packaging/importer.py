@@ -153,11 +153,21 @@ class Package:
         committed = []
         try:
             status('Checking disc image...')
-            _, listing = runner.run(self.tool('7z', 'l', '-slt', '-ba', '--', iso), capture=True, log=None)
+            code, listing = runner.run(self.tool('7z', 'l', '-slt', '-ba', '--', iso), capture=True, log=None)
+            if log:
+                log.write(('ISO listing (7-Zip exit %d):\n' % code + listing + '\n').encode('utf-8'))
+                log.flush()
+            if 'Codec Load Error' in listing:
+                raise ImportError('The bundled ISO reader could not load its format support. Update the AppImage; see import.log for details.')
             entries = disc_entries(listing)
+            if not entries:
+                raise ImportError('Could not read the ISO filesystem. Check that the file is a complete ISO image. See import.log for the ISO reader output.')
             for name, info in self.manifest.items():
-                if name not in entries or entries[name].get('Size') != str(info['size']):
-                    raise ImportError('This ISO is not the supported BLJS10220 disc, or its filesystem is encrypted: ' + name)
+                if name not in entries:
+                    raise ImportError('Required disc file is missing from the ISO: ' + name + '. Expected the Japan BLJS10220 edition; see import.log.')
+                if entries[name].get('Size') != str(info['size']):
+                    raise ImportError('Disc file size differs from the supported Japan BLJS10220 edition: ' + name +
+                                      ' (expected %s bytes, found %s). See import.log.' % (info['size'], entries[name].get('Size', 'unknown')))
             pup = 'PS3_UPDATE/PS3UPDAT.PUP'
             if pup not in entries:
                 raise ImportError('The ISO must include PS3_UPDATE/PS3UPDAT.PUP for local audio codec setup.')

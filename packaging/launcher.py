@@ -40,6 +40,9 @@ def main():
         for tool in ('7z', 'ffmpeg', 'ffprobe'):
             if not (ROOT / 'usr/bin' / tool).is_file():
                 raise ImportError('Missing bundled tool: ' + tool)
+        code, formats = Runner().run(package.tool('7z', 'i'), capture=True)
+        if code or 'Codec Load Error' in formats or 'Udf' not in formats:
+            raise ImportError('Bundled ISO reader is missing UDF format support.')
         print(json.dumps({'status': 'OK', 'title_id': 'BLJS10220', 'files': len(package.manifest),
                           'cpu': 'AVX2/FMA', 'elf_sha256': package.meta['elf_sha256']}, indent=2))
         return

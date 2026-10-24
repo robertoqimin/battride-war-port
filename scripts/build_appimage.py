@@ -3,6 +3,7 @@
 import os,sys,subprocess,shutil,json,hashlib,re,time,argparse
 from pathlib import Path
 ap=argparse.ArgumentParser(description=__doc__)
+ap.add_argument('--sevenzip-dir', type=Path, required=True, help='Official standalone 7-Zip Linux directory containing 7zz and License.txt')
 ap.add_argument('--runtime', type=Path, required=True, help='Official type2-runtime x86_64 binary')
 ap.add_argument('--rpcs3-dir', type=Path, required=True, help='Extracted RPCS3 AppDir')
 ap.add_argument('--output', type=Path, required=True)
@@ -28,7 +29,8 @@ for n in ['gi','cairo']:shutil.copytree(stdlib/'site-packages'/n,S/'usr/lib/pyth
 shutil.copytree('/usr/lib64/girepository-1.0',S/'usr/lib/girepository-1.0')
 copy('/usr/share/glib-2.0/schemas/gschemas.compiled',S/'usr/share/glib-2.0/schemas/gschemas.compiled')
 shutil.copytree(args.rpcs3_dir,S/'usr/rpcs3',symlinks=True)
-copy('/usr/bin/7z',S/'usr/bin/7z');copy('/usr/libexec/7zip/7z.so',S/'usr/bin/7z.so')
+copy(args.sevenzip_dir/'7zz',S/'usr/bin/7z')
+copy(args.sevenzip_dir/'License.txt',S/'usr/share/licenses/7zip/License.txt')
 for n in ['ffmpeg','ffprobe']:
  copy('/usr/bin/'+n,S/'usr/libexec'/n)
  wrapper=S/'usr/bin'/n
@@ -63,7 +65,7 @@ for p in sorted((P/'game/PS3_GAME').rglob('*')):
 p=P/'game/PS3_DISC.SFB'
 if p.exists():manifest['PS3_DISC.SFB']={'size':p.stat().st_size,'sha256':sha(p)}
 (S/'app/disc-manifest.json').write_text(json.dumps(manifest,separators=(',',':')))
-meta={'elf_sha256':'a53b7bca5d47490710ba02af5f885e1219d10c7a1a456fcf6e13a48db668a014','codecs':{p.name:sha(p) for p in (P/'firmware/dev_flash/sys/external').glob('*.pic')},'cpu':'znver2 / AVX2 FMA','runner_sha256':sha(S/'usr/bin/game-runner'),'runtime_sha256':sha(args.runtime)}
+meta={'elf_sha256':'a53b7bca5d47490710ba02af5f885e1219d10c7a1a456fcf6e13a48db668a014','codecs':{p.name:sha(p) for p in (P/'firmware/dev_flash/sys/external').glob('*.pic')},'version':'0.1.1','sevenzip_sha256':sha(S/'usr/bin/7z'),'cpu':'znver2 / AVX2 FMA','runner_sha256':sha(S/'usr/bin/game-runner'),'runtime_sha256':sha(args.runtime)}
 (S/'app/package.json').write_text(json.dumps(meta,indent=2));(S/'app/library-sources.json').write_text(json.dumps(bom,indent=2))
 (S/'AppRun').write_text('''#!/bin/sh
 APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

@@ -20,10 +20,10 @@ The AppImage contains tools and libraries, but no ISO, game assets, EBOOT ELF, s
 
 ## Build
 
-Requires an existing `build-vulkan/kamenriderbattridewarsport`, the original extracted disc under `game/`, local firmware codecs under `firmware/`, Python 3.14/PyGObject/GTK 3, 7zip, FFmpeg, mksquashfs, an extracted official RPCS3 AppImage and the official AppImage type2-runtime x86_64 binary. No files are downloaded automatically. Obtain the runtime from https://github.com/AppImage/type2-runtime and verify its published SHA-256.
+Requires an existing `build-vulkan/kamenriderbattridewarsport`, the original extracted disc under `game/`, local firmware codecs under `firmware/`, Python 3.14/PyGObject/GTK 3, the official standalone 7-Zip Linux distribution (`7zz`), FFmpeg, mksquashfs, an extracted official RPCS3 AppImage and the official AppImage type2-runtime x86_64 binary. No files are downloaded automatically. Obtain the runtime from https://github.com/AppImage/type2-runtime and verify its published SHA-256.
 
 ```sh
-python3 scripts/build_appimage.py --runtime /path/runtime-x86_64 --rpcs3-dir /path/RPCS3/AppDir --output dist/BattrideWarPort-x86_64.AppImage
+python3 scripts/build_appimage.py --runtime /path/runtime-x86_64 --rpcs3-dir /path/RPCS3/AppDir --sevenzip-dir /path/7zip-linux --output dist/BattrideWarPort-x86_64.AppImage
 ```
 
 The builder refuses existing stage/output paths. Use `--stage` and another output filename for subsequent builds. It bundles the matching Fedora dynamic loader and glibc; GPU drivers remain supplied by the host. Dependency paths are recorded in `app/library-sources.json`; component hashes are in `app/package.json`. Installed dependency licenses and RPCS3 notices are retained. RPCS3 source: https://github.com/RPCS3/rpcs3 (helper build 0b0fa082). Generic Vulkan/GL loaders are bundled; vendor driver implementations are not.
@@ -34,3 +34,7 @@ Headless checks:
 ./BattrideWarPort-x86_64.AppImage --check
 ./BattrideWarPort-x86_64.AppImage --import-only /path/game.iso --data-dir /new/empty/data
 ```
+
+## ISO import fix in 0.1.1
+
+The initial 0.1 package inadvertently depended on Fedora’s `/usr/libexec/7zip/7z.so`, so a different PC could fail at the first manifest file (`PS3_GAME/ICON0.PNG`). Version 0.1.1 uses the official standalone `7zz`, checks actual UDF support in `--check`, and records the ISO reader output in the import log. Disc size/hash validation remains enabled.
