@@ -47,6 +47,9 @@
 #ifndef _WIN32
 #include <sys/mman.h>   /* mmap: the guest arena, see alloc_guest_vm */
 #endif
+#ifdef __linux__
+#include <link.h>       /* dl_iterate_phdr: the code segment, see remap_text_huge */
+#endif
 
 #ifdef _WIN32
 /* timeBeginPeriod: <windows.h> arrives with WIN32_LEAN_AND_MEAN set, which
@@ -351,6 +354,59 @@ static LONG WINAPI vm_commit_veh(EXCEPTION_POINTERS* ep)
 }
 #endif
 
+#if defined(__linux__) && defined(MADV_HUGEPAGE) && defined(MREMAP_FIXED)
+/* The translated PPU code is close to 100 MB, and the busy game thread jumps
+ * all over it, so 4 KB code pages keep missing the instruction TLB. Most
+ * kernels cannot back a file's code with huge pages, so copy the 2 MB-aligned
+ * part of the text into anonymous huge pages and move that over the original
+ * with one atomic mremap. The bytes and addresses are the same, so this code,
+ * symbols and profiles are unaffected. Runs before any other thread starts;
+ * any failure leaves the original mapping in place. PORT_HUGEPAGES=0 skips it.
+ *
+ * Not for guest memory: MADV_HUGEPAGE on the arena in alloc_guest_vm made the
+ * STG02 combat slower on a Ryzen 5 4600H (45.7 against 49.9 fps over six and
+ * five runs, twice the frames over 33 ms), cause not established. */
+static int find_text_segment(struct dl_phdr_info* info, size_t, void* out)
+{
+    for (int i = 0; i < info->dlpi_phnum; i++) {   /* first object: the executable */
+        const ElfW(Phdr)& ph = info->dlpi_phdr[i];
+        if (ph.p_type == PT_LOAD && (ph.p_flags & PF_X)) {
+            ((uintptr_t*)out)[0] = info->dlpi_addr + ph.p_vaddr;
+            ((uintptr_t*)out)[1] = info->dlpi_addr + ph.p_vaddr + ph.p_memsz;
+            break;
+        }
+    }
+    return 1;
+}
+static void remap_text_huge(void)
+{
+    const char* huge = getenv("PORT_HUGEPAGES");
+    if (huge && *huge == '0') return;
+    uintptr_t text[2] = {0, 0};
+    dl_iterate_phdr(find_text_segment, text);
+    const uintptr_t huge_page = 2u << 20;
+    const uintptr_t start = (text[0] + huge_page - 1) & ~(huge_page - 1);
+    const uintptr_t end = text[1] & ~(huge_page - 1);
+    if (end <= start) return;
+    const size_t len = end - start;
+    /* Huge pages only form at 2 MB-aligned addresses: over-map and trim. */
+    uint8_t* raw = (uint8_t*)mmap(NULL, len + huge_page, PROT_READ | PROT_WRITE,
+                                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (raw == MAP_FAILED) return;
+    uint8_t* tmp = (uint8_t*)(((uintptr_t)raw + huge_page - 1) & ~(huge_page - 1));
+    if (tmp > raw) munmap(raw, tmp - raw);
+    if (raw + huge_page > tmp) munmap(tmp + len, raw + huge_page - tmp);
+    madvise(tmp, len, MADV_HUGEPAGE);
+    memcpy(tmp, (const void*)start, len);
+    if (mprotect(tmp, len, PROT_READ | PROT_EXEC) != 0 ||
+        mremap(tmp, len, len, MREMAP_MAYMOVE | MREMAP_FIXED, (void*)start) == MAP_FAILED) {
+        munmap(tmp, len);
+        return;
+    }
+    fprintf(stderr, "[port] %zu MiB of code moved to huge pages\n", len >> 20);
+}
+#endif
+
 static bool alloc_guest_vm(void)
 {
 #ifdef _WIN32
@@ -403,6 +459,9 @@ int main(int argc, char** argv)
 #endif
 
     printf("=== ps3recomp game runner ===\n");
+#if defined(__linux__) && defined(MADV_HUGEPAGE) && defined(MREMAP_FIXED)
+    remap_text_huge();
+#endif
 
     if (!alloc_guest_vm()) {
         fprintf(stderr, "ERROR: could not allocate the guest address space\n");

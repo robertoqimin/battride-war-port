@@ -363,8 +363,10 @@ static void port_pad_get_data(ppu_context* c)
 /* PORT_PROFILE=<file>: CPU-time sampling profiler that does not stop the
  * game (a debugger attach pauses every thread). A process CPU-time timer
  * raises SIGPROF about PORT_PROFILE_HZ times a second (default 1000); the
- * thread that was running records its id and instruction pointer, and a
- * helper thread appends "<tid> <hex rip>" lines to the file every second.
+ * thread that was running records its id, instruction pointer and the word
+ * on top of its stack (the caller's return address while a leaf such as a
+ * memory accessor has not pushed anything yet), and a helper thread appends
+ * "<tid> <hex rip> <hex top-of-stack>" lines to the file every second.
  * Symbolise with nm/addr2line against the (non-PIE) executable. */
 #include <csignal>
 #include <ctime>
@@ -373,7 +375,7 @@ static void port_pad_get_data(ppu_context* c)
 #include <sys/syscall.h>
 #include <unistd.h>
 namespace {
-struct ProfSample { uint32_t tid; uint64_t rip; };
+struct ProfSample { uint32_t tid; uint64_t rip, tos; };
 constexpr uint32_t kProfRing = 1u << 20;
 ProfSample* s_prof_ring;
 std::atomic<uint32_t> s_prof_head{0};
@@ -384,6 +386,7 @@ void port_prof_signal(int, siginfo_t*, void* uc_)
     ProfSample& s = s_prof_ring[i & (kProfRing - 1)];
     s.tid = (uint32_t)syscall(SYS_gettid);
     s.rip = (uint64_t)uc->uc_mcontext.gregs[REG_RIP];
+    s.tos = *(const uint64_t*)uc->uc_mcontext.gregs[REG_RSP];
 }
 }
 extern "C" void port_profiler_start(void)
@@ -415,7 +418,7 @@ extern "C" void port_profiler_start(void)
             if (FILE* f = std::fopen(out.c_str(), "a")) {
                 for (; tail != head; tail++) {
                     const ProfSample& s = s_prof_ring[tail & (kProfRing - 1)];
-                    std::fprintf(f, "%u %lx\n", s.tid, (unsigned long)s.rip);
+                    std::fprintf(f, "%u %lx %lx\n", s.tid, (unsigned long)s.rip, (unsigned long)s.tos);
                 }
                 std::fclose(f);
             }

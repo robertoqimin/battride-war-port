@@ -20,11 +20,32 @@ The report gives average FPS, median/p95/p99 and maximum interval, and the count
 of frames over the 30 FPS budget. Captures and CPU sampling add overhead; use
 identical settings on both sides, then check a run without them.
 
-`PORT_PROFILE_HZ` controls the existing CPU sampler (default 1000). Symbolize its
-thread/address samples against `nm -n` output from the exact executable tested.
+`PORT_PROFILE_HZ` controls the existing CPU sampler (default 1000). Each line is
+`<thread id> <address> <top of stack>`; the last field is the caller's return
+address while the sample is in a leaf that has not pushed anything yet (the
+memory helpers, for example), which attributes helper samples to their generated
+chunk. Symbolize against `nm -n` output from the exact executable tested.
+The process CPU-time timer delivers at most about one sample per millisecond
+for the whole process, so samples are shares, not per-thread CPU time; read
+`/proc/<pid>/task/*/stat` to see which thread is saturated.
 Samples in shared libraries need their loaded address mappings; do not attribute
 them to the last executable symbol. CPU samples locate candidates; they do not
 by themselves prove that an optimization improves frame pacing.
+
+## Huge pages
+
+On Linux the runner copies the 2 MB-aligned part of its code segment (about 92
+MiB, mostly translated PPU code) into anonymous transparent huge pages at
+startup and moves them over the original mapping, so the busy PPU thread misses
+the instruction TLB less often. Addresses and bytes are unchanged; profiles and
+symbols still match. It needs THP in `madvise` or `always` mode
+(`/sys/kernel/mm/transparent_hugepage/enabled`); check `AnonHugePages` of the
+`r-xp` mapping in `/proc/<pid>/smaps`. `PORT_HUGEPAGES=0` disables it.
+
+Measured in STG02 combat on a Ryzen 5 4600H (`bench.py`-style 60-second windows,
+alternating runs): code huge pages 50.8 fps against 49.9 without (three and
+five runs), within run-to-run noise. Huge pages for the guest memory arena were
+tried and rejected: 45.7 fps over six runs, with twice the frames over 33 ms.
 
 ## Vulkan changes
 
