@@ -21,10 +21,10 @@ of frames over the 30 FPS budget. Captures and CPU sampling add overhead; use
 identical settings on both sides, then check a run without them.
 
 `PORT_PROFILE_HZ` controls the existing CPU sampler (default 1000). Each line is
-`<thread id> <address> <top of stack>`; the last field is the caller's return
-address while the sample is in a leaf that has not pushed anything yet (the
-memory helpers, for example), which attributes helper samples to their generated
-chunk. Symbolize against `nm -n` output from the exact executable tested.
+`<thread id> <address> <caller>`; the last field is the first of the top 32
+stack words that points into the executable's code (0 if none), usually the
+return address into the caller, also for samples inside libc or the vDSO. It
+attributes memory-helper and clock-read samples to the code that made them. Symbolize against `nm -n` output from the exact executable tested.
 The process CPU-time timer delivers at most about one sample per millisecond
 for the whole process, so samples are shares, not per-thread CPU time; read
 `/proc/<pid>/task/*/stat` to see which thread is saturated.
