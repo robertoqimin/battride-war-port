@@ -113,6 +113,15 @@ comparison; unit tests do not establish an FPS gain. Inlining moves CPU samples
 from helper symbols into their guest callers, so a lower helper percentage
 alone is not evidence of reduced CPU time.
 
+Widening the list was measured and rejected (STG02 combat, Ryzen 5 4600H, four
+alternating runs each against the five-chunk build): adding the next twelve
+chunks by heavy-combat samples (001, 009-011, 013, 016, 018, 020, 024, 026-028)
+gave 46.7 against 45.9 fps but twice the frames over 33 ms (110 against 55),
+with a 27 MB larger executable; adding only 013, 020 and 028 gave 46.0 against
+45.9 fps and more frames over 33 ms (71 against 48). Combat on that machine is
+limited by the busy PPU thread at 98% of a core; the inlined helpers do not
+shorten it measurably beyond the original chunks.
+
 ```bash
 bash tests/test_ppu_memory.sh
 CXX=clang++ SANITIZE=1 bash tests/test_ppu_memory.sh
