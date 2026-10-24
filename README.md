@@ -20,6 +20,46 @@ This repository contains port code, configuration, tests, and instructions. **It
 
 The long gameplay session used a six-second PAMF replacement solely to speed up the introduction. Original assets were not modified; the normal launcher still uses the original video. The entire sequence with that video was not repeated during the latest gameplay validation.
 
+## System requirements (portable AppImage)
+
+Only one system has been tested: Fedora, Ryzen 7 5700X, GTX 1650. Everything below meets the checks in `packaging/launcher.py`, `packaging/graphics_probe.c` and the Vulkan backend, but has not been run.
+
+**CPU:** x86_64 with SSSE3 and SSE4.1 (the portable runner is built with `PORT_PORTABLE=ON`, `-march=x86-64 -msse4.1`; no AVX is required).
+
+| Supported | Not supported |
+|---|---|
+| Intel Core 2 45 nm (Penryn/Wolfdale/Yorkfield) and newer | Intel Core 2 65 nm (Conroe/Merom): no SSE4.1 |
+| Every Intel Core i3/i5/i7/i9 generation, Xeon from Nehalem | Intel Atom Bonnell/Saltwell (Silvermont and newer are fine) |
+| Intel Pentium/Celeron from Silvermont/Goldmont, N100/N200 | AMD Athlon 64, Phenom, Phenom II (K8/K10): SSE4a only |
+| AMD FX (Bulldozer/Piledriver), A-series APUs, Jaguar | ARM and RISC-V |
+| Every AMD Ryzen, Threadripper and EPYC generation | |
+
+The 30 fps figures above were measured with a Zen 2 AVX2 build whose render thread was already close to saturation; the generic build is expected to be slower in combat. CPUs below a Ryzen 5 3600 / 8th-gen Core i5 will likely run under 30 fps.
+
+**GPU:** Vulkan 1.0 with a graphics queue that can present to the window, `VK_KHR_swapchain` and `textureCompressionBC` (PS3 DXT textures). The launcher's graphics check rejects devices without BC textures.
+
+| Vendor | Supported | Driver |
+|---|---|---|
+| NVIDIA | GeForce 600 (Kepler) and newer: GTX 700/900/10/16, RTX 20/30/40/50 | Proprietary (470 legacy for Kepler); NVK (Mesa 24.1+) for Turing and newer |
+| AMD | Radeon HD 7000 (GCN 1) and newer: R7/R9, RX 400/500, Vega, RX 5000-9000, Ryzen APUs, Steam Deck | Mesa RADV (`amdgpu` kernel driver for GCN 1/2) |
+| Intel | Ivy Bridge/Haswell graphics and newer (HD 4000+, UHD, Iris Xe), Arc A/B | Mesa ANV (`hasvk` for Gen7/Gen8) |
+
+Not supported: GPUs without Vulkan (NVIDIA Fermi and older, AMD TeraScale / HD 6000 and older, Intel Sandy Bridge and older). Software Vulkan (lavapipe) passes the check but is far too slow. A GTX 1650 reaches about 30 fps; older integrated and entry-level GPUs will likely be slower.
+
+**Distribution:** glibc 2.35 or newer, with the host Vulkan loader (`libvulkan.so.1`) and GPU driver installed. The AppImage does not bundle libc, the Vulkan/GL loaders, Mesa or the X11/Wayland libraries. FUSE 3 (`fusermount3`) is needed, or run with `--appimage-extract-and-run`.
+
+| Supported | Not supported |
+|---|---|
+| Ubuntu 22.04 / 24.04 and newer; Kubuntu, Xubuntu, Linux Mint 21+, Pop!_OS 22.04+, Zorin OS 17+, elementary OS 7+ | Ubuntu 20.04 and older, Linux Mint 20 |
+| Debian 12 (Bookworm), 13 (Trixie) | Debian 11 and older |
+| Fedora 36+; Nobara, Bazzite | RHEL / AlmaLinux / Rocky 9 (glibc 2.34) and older |
+| RHEL / AlmaLinux / Rocky 10 | openSUSE Leap 15.x |
+| openSUSE Tumbleweed, Leap 16 | musl distributions (Alpine, Void musl) |
+| Arch, Manjaro, EndeavourOS, CachyOS, Garuda | NixOS without `steam-run` / `appimage-run` |
+| Recent SteamOS 3 (Steam Deck): likely, unverified | |
+
+On hosts whose libstdc++ is older than RPCS3 needs (below `GLIBCXX_3.4.32`, e.g. Ubuntu 22.04 and Debian 12) the importer runs the RPCS3 helper with RPCS3's own `checkrt` libstdc++/libgcc_s.
+
 ## Performance tuning
 
 The local tuning work adds exact SIMD vertex decoding, reuse of Vulkan constant
