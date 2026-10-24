@@ -22,9 +22,9 @@ def cpu_check():
                 break
     except OSError:
         pass
-    missing = {'avx2', 'fma', 'bmi1', 'bmi2', 'sse4_1', 'sse4_2', 'aes'} - flags
+    missing = {'ssse3', 'sse4_1'} - flags
     if missing:
-        raise ImportError('This build needs an AVX2/FMA x86_64 CPU (Ryzen 7 5700X is supported). Missing: ' + ', '.join(sorted(missing)))
+        raise ImportError('This build needs an x86_64 CPU with SSE4.1 (Ryzen 7 5700X is supported). Missing: ' + ', '.join(sorted(missing)))
 
 
 def main():
@@ -44,7 +44,7 @@ def main():
         if code or 'Codec Load Error' in formats or 'Udf' not in formats:
             raise ImportError('Bundled ISO reader is missing UDF format support.')
         print(json.dumps({'status': 'OK', 'title_id': 'BLJS10220', 'files': len(package.manifest),
-                          'cpu': 'AVX2/FMA', 'elf_sha256': package.meta['elf_sha256']}, indent=2))
+                          'cpu': 'x86_64 / SSE4.1', 'elf_sha256': package.meta['elf_sha256']}, indent=2))
         return
     default_data = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')) / 'battride-war-port'
     data = (args.data_dir or default_data).resolve()
@@ -107,7 +107,7 @@ def main():
             actions.pack_start(self.start, False, False, 0);actions.pack_start(self.stop, False, False, 0)
             box.pack_start(actions, False, False, 0)
             self.progress = Gtk.ProgressBar();box.pack_start(self.progress, False, False, 0)
-            self.status = Gtk.Label(label='Ready. Requires a Vulkan-capable GPU and an AVX2/FMA CPU.', xalign=0)
+            self.status = Gtk.Label(label='Ready. Requires a Vulkan-capable GPU and an x86_64/SSE4.1 CPU.', xalign=0)
             self.status.set_line_wrap(True);box.pack_start(self.status, False, False, 0)
             self.stats = Gtk.Label(label='', xalign=0);box.pack_start(self.stats, False, False, 0)
             GLib.timeout_add(1000, self.tick)
@@ -152,8 +152,14 @@ def main():
                 try:
                     with (self.log_dir / 'import.log').open('wb') as log:
                         package.import_iso(iso, dest, self.runner, self.message, log)
+                    self.message('Checking Vulkan driver and window support...')
+                    code, details = self.runner.run(package.tool('graphics-probe'),
+                                                    env=package.game_env(dest, self.log_dir), capture=True)
+                    (self.log_dir / 'graphics.log').write_text(details)
+                    if code:
+                        raise ImportError('Vulkan/window check failed. See graphics.log: ' + details[-1800:])
                     self.playing = True
-                    self.message('Running. Use your controller or keyboard. Logs: ' + str(self.log_dir))
+                    self.message('Starting game. Logs: ' + str(self.log_dir))
                     with (self.log_dir / 'game.log').open('wb') as log:
                         code, _ = self.runner.run(package.tool('game-runner', dest / 'game/EBOOT.ELF'),
                                                   cwd=dest, env=package.game_env(dest, self.log_dir, hud), log=log)
@@ -179,6 +185,15 @@ def main():
             if self.closed:return False
             if self.runner and not self.start.get_sensitive():self.progress.pulse()
             if self.playing and self.log_dir:
+                try:
+                    with (self.log_dir / 'game.log').open('rb') as boot:
+                        startup = boot.read(16384).decode(errors='replace')
+                    if '[rsx] Vulkan backend init OK -- window open' in startup:
+                        self.status.set_text('Game window opened. Use your controller or keyboard. Logs: ' + str(self.log_dir))
+                    elif '[rsx] Vulkan backend init FAILED' in startup:
+                        self.status.set_text('Game Vulkan startup failed. Stop the game and send game.log from: ' + str(self.log_dir))
+                except OSError:
+                    pass
                 try:
                     with (self.log_dir / 'frames.csv').open('rb') as f:
                         f.seek(0, 2);size=f.tell();f.seek(max(0, size-32768));lines=f.read().decode().splitlines()[1:]

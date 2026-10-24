@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import signal
@@ -17,7 +18,27 @@ class ImportError(RuntimeError):
 
 def digest(path):
     with Path(path).open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        value = hashlib.sha256()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            value.update(chunk)
+        return value.hexdigest()
+
+
+def host_lib(name):
+    for d in ('/usr/lib/x86_64-linux-gnu', '/lib/x86_64-linux-gnu', '/usr/lib64', '/lib64', '/usr/lib', '/lib'):
+        if (Path(d) / name).is_file():
+            return Path(d) / name
+    return None
+
+
+def symbol_version(path, prefix):
+    """Highest symbol version (e.g. GLIBCXX_3.4.32) a library provides; () if unknown."""
+    try:
+        data = Path(path).read_bytes()
+    except (OSError, TypeError):
+        return ()
+    return max((tuple(int(x) for x in m.split(b'.'))
+                for m in re.findall(re.escape(prefix) + rb'(\d+(?:\.\d+)*)\x00', data)), default=())
 
 
 def safe_name(name):
@@ -93,8 +114,7 @@ class Package:
         self.manifest = json.loads((self.root / 'app/disc-manifest.json').read_text())
 
     def tool(self, name, *args):
-        return [self.root / 'usr/lib/ld-linux-x86-64.so.2', '--library-path',
-                self.root / 'usr/lib', self.root / 'usr/bin' / name, *args]
+        return [self.root / 'usr/bin' / name, *args]
 
     def helper_env(self, stage):
         env = os.environ.copy()
@@ -102,14 +122,25 @@ class Package:
             if key.startswith(('APPIMAGE', 'PYTHON', 'GI_', 'GTK_', 'GDK_', 'QT_')) or key in (
                     'APPDIR', 'LD_LIBRARY_PATH', 'LD_PRELOAD', 'GIO_MODULE_DIR', 'GSETTINGS_SCHEMA_DIR', 'MANGOHUD'):
                 env.pop(key, None)
+        env['LD_LIBRARY_PATH'] = ':'.join(self.rpcs3_runtime() + [str(self.root / 'usr/rpcs3/usr/lib'),
+                                                                  str(self.root / 'usr/lib')])
         env.update(XDG_CONFIG_HOME=str(stage / 'rpcs3-config'),
                    XDG_CACHE_HOME=str(stage / 'rpcs3-cache'), XDG_DATA_HOME=str(stage / 'rpcs3-data'))
         return env
 
+    def rpcs3_runtime(self):
+        # RPCS3's AppRun normally runs checkrt, which prefers its bundled C++
+        # runtime when the host one is older. We start the binary directly, so
+        # repeat that choice; otherwise GCC 12 hosts lack GLIBCXX_3.4.32.
+        dirs = []
+        for sub, name, prefix in (('cxx', 'libstdc++.so.6', b'GLIBCXX_'), ('gcc', 'libgcc_s.so.1', b'GCC_')):
+            bundled = self.root / 'usr/rpcs3/checkrt' / sub / name
+            if bundled.is_file() and symbol_version(bundled, prefix) > symbol_version(host_lib(name), prefix):
+                dirs.append(str(bundled.parent))
+        return dirs
+
     def rpcs3(self, *args):
-        return [self.root / 'usr/lib/ld-linux-x86-64.so.2', '--library-path',
-                str(self.root / 'usr/lib') + ':' + str(self.root / 'usr/rpcs3/usr/lib'),
-                self.root / 'usr/rpcs3/usr/bin/rpcs3', '--allow-any-location', '--headless', *args]
+        return [self.root / 'usr/rpcs3/usr/bin/rpcs3', '--allow-any-location', '--headless', *args]
 
     def verify_game(self, game, status=lambda _: None):
         for i, (name, info) in enumerate(self.manifest.items()):
@@ -229,6 +260,8 @@ class Package:
             if k.startswith(('PAD_', 'PORT_', 'PPU_', 'SPU_', 'YDKJ_', 'GCM_', 'RSX_')) or k in (
                     'LD_LIBRARY_PATH', 'LD_PRELOAD', 'PS3_VFS_ROOT', 'PS3_GAMEDATA_ROOT', 'PS3_DEV_FLASH'):
                 env.pop(k, None)
+        env['LD_LIBRARY_PATH'] = str(self.root / 'usr/lib')
+        env.setdefault('VK_LOADER_DEBUG', 'error,warn')
         env.update(PS3_VFS_ROOT=str(data / 'game'), PS3_GAMEDATA_ROOT=str(data / 'gamedata'),
                    PS3_DEV_FLASH=str(data / 'firmware/dev_flash'), PS3RECOMP_VK_GUEST_PROGRAMS='1',
                    PS3RECOMP_VK_WINDOW='1', PORT_GCM_EXPAND_BUFFERS='0',
