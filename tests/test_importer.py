@@ -104,6 +104,17 @@ class ImporterTests(unittest.TestCase):
         self.assertEqual(m.display_env({'mode':'evil; rm','size':'1920x1080 && x','filter':'?','scale':'8'}),{})
         self.assertEqual(m.display_env({'scale':'2'}),{'PORT_RENDER_SCALE':'2'})
         self.assertEqual(m.display_env({}),{})
+    def test_controls_text(self):
+        text=m.controls_text({})
+        self.assertIn('square = Mouse Left, J\n',text)
+        self.assertIn('camera_up = \n',text)
+        self.assertIn('mouse_sensitivity = 1.00\n',text)
+        text=m.controls_text({'bindings':{'square':['F','bad,key','x\ny'],'cross':[]},'mouse_sensitivity':99,'invert_y':True})
+        self.assertIn('square = F\n',text)
+        self.assertIn('cross = \n',text)
+        self.assertIn('mouse_sensitivity = 10.00\n',text)
+        self.assertIn('invert_y = 1\n',text)
+        self.assertEqual(len([l for l in text.splitlines() if ' = ' in l]),len(m.CONTROLS)+2)
     def test_build_jobs_positive(self):
         self.assertGreaterEqual(m.build_jobs(),1)
 

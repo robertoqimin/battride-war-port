@@ -112,7 +112,9 @@ A controller (anything SDL2 recognises: DualShock, DualSense, Xbox, Switch Pro..
 | Esc | START (pause) |
 | Tab | SELECT |
 
-Click in the window to let the mouse move the camera (in fullscreen it is captured automatically); Alt or switching away releases it. `PORT_MOUSE_SENSITIVITY` scales the camera (default 1.0). Close the game with the window's close button.
+Click in the window to let the mouse move the camera (in fullscreen it is captured automatically); Alt or switching away releases it. Close the game with the window's close button.
+
+**Remapping:** the launcher's **Controls…** button lists every pad control: click one and press the key or mouse button to use, **+** adds another, **Clear** unbinds it. The same window sets the mouse camera sensitivity (0.1 to 5.0, default 1.0), inverts the camera's up/down, and can bind keys to the camera for playing without a mouse. Keys follow the keyboard layout (on AZERTY, the key labelled Z is Z). The launcher writes the choice to `controls.cfg` in the data folder; outside the launcher, point `PORT_CONTROLS` at such a file (one `control = key, key` per line, SDL key names such as `W`, `Space`, `Left Shift`, or `Mouse Left`/`Middle`/`Right`/`X1`/`X2`). `PORT_MOUSE_SENSITIVITY` overrides the file's sensitivity.
 
 ## Display options
 

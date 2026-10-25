@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 
-from importer import DISPLAY_FILTERS, DISPLAY_MODES, RENDER_SCALES, ImportError, Package, Runner
+from importer import CONTROLS, DISPLAY_FILTERS, DISPLAY_MODES, RENDER_SCALES, ImportError, Package, Runner, binding_ok
 
 ROOT = Path(os.environ.get('PORT_APPDIR', Path(__file__).resolve().parents[1]))
 
@@ -95,6 +95,32 @@ def main():
         sizes = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440), (3200, 1800), (3840, 2160)]
         return ['%dx%d' % (w, h) for w, h in sizes if (w, h) == (1280, 720) or (w <= largest[0] and h <= largest[1])]
 
+    # GDK key names that differ from SDL's (input_bridge.c resolves SDL names).
+    SDL_KEYS = {'space': 'Space', 'Return': 'Return', 'KP_Enter': 'Keypad Enter', 'BackSpace': 'Backspace',
+                'Escape': 'Escape', 'Tab': 'Tab', 'ISO_Left_Tab': 'Tab', 'Shift_L': 'Left Shift',
+                'Shift_R': 'Right Shift', 'Control_L': 'Left Ctrl', 'Control_R': 'Right Ctrl',
+                'Alt_L': 'Left Alt', 'Alt_R': 'Right Alt', 'Super_L': 'Left GUI', 'Super_R': 'Right GUI',
+                'Up': 'Up', 'Down': 'Down', 'Left': 'Left', 'Right': 'Right', 'Insert': 'Insert',
+                'Delete': 'Delete', 'Home': 'Home', 'End': 'End', 'Page_Up': 'PageUp', 'Page_Down': 'PageDown',
+                'Caps_Lock': 'CapsLock', 'KP_Add': 'Keypad +', 'KP_Subtract': 'Keypad -',
+                'KP_Multiply': 'Keypad *', 'KP_Divide': 'Keypad /', 'KP_Decimal': 'Keypad .'}
+    SDL_MOUSE = {1: 'Mouse Left', 2: 'Mouse Middle', 3: 'Mouse Right', 8: 'Mouse X1', 9: 'Mouse X2'}
+
+    def sdl_key_name(event):
+        """The SDL name of the key pressed, ignoring Shift and other modifiers; None if unusable."""
+        keymap = Gdk.Keymap.get_for_display(Gdk.Display.get_default())
+        found, keyval, _, _, _ = keymap.translate_keyboard_state(event.hardware_keycode, 0, event.group)
+        name = Gdk.keyval_name(keyval if found else event.keyval) or ''
+        if name in SDL_KEYS:
+            return SDL_KEYS[name]
+        if name.startswith('KP_') and name[3:].isdigit():
+            return 'Keypad ' + name[3:]
+        if len(name) <= 3 and name[:1] == 'F' and name[1:].isdigit():
+            return name
+        code = Gdk.keyval_to_unicode(keyval)
+        char = chr(code).upper() if code else ''
+        return char if char.isprintable() and binding_ok(char) and char != ' ' else None
+
     class Window:
         def __init__(self):
             self.closed = False
@@ -173,9 +199,12 @@ def main():
             actions = Gtk.Box(spacing=10)
             self.start = Gtk.Button(label='Import ISO & Play');self.start.connect('clicked', self.begin)
             self.stop = Gtk.Button(label='Stop');self.stop.set_sensitive(False);self.stop.connect('clicked', self.stop_job)
+            self.controls = saved.get('controls', {}) if isinstance(saved.get('controls'), dict) else {}
+            self.keys_button = Gtk.Button(label='Controls…');self.keys_button.connect('clicked', self.show_controls)
             credits = Gtk.Button(label='Credits & licenses');credits.connect('clicked', self.show_credits)
             actions.pack_start(self.start, False, False, 0);actions.pack_start(self.stop, False, False, 0)
             actions.pack_end(credits, False, False, 0)
+            actions.pack_end(self.keys_button, False, False, 0)
             box.pack_start(actions, False, False, 0)
             self.progress = Gtk.ProgressBar();box.pack_start(self.progress, False, False, 0)
             self.status = Gtk.Label(label='Ready. Requires a Vulkan GPU, an SSE4.1 CPU, about 8 GB of RAM and 8 GB of free space.', xalign=0)
@@ -195,7 +224,8 @@ def main():
             def apply():
                 if self.closed:
                     return False
-                for widget in (self.iso, self.data, self.hud, self.start, self.mode, self.filter, self.scale):widget.set_sensitive(enabled)
+                for widget in (self.iso, self.data, self.hud, self.start, self.mode, self.filter, self.scale,
+                               self.keys_button):widget.set_sensitive(enabled)
                 self.size.set_sensitive(enabled and self.mode.get_active_id() != 'borderless')
                 self.stop.set_sensitive(not enabled)
                 if enabled:self.progress.set_fraction(0)
@@ -221,7 +251,7 @@ def main():
             self.log_dir = dest / 'logs' / (time.strftime('%Y%m%d-%H%M%S') + '-' + str(os.getpid()))
             self.log_dir.mkdir(parents=True, exist_ok=False)
             config_path.parent.mkdir(parents=True, exist_ok=True)
-            config_path.write_text(json.dumps({'iso': iso, 'data': str(dest), 'display': display}, indent=2))
+            self.save_settings({'iso': iso, 'data': str(dest), 'display': display})
             def worker():
                 try:
                     with (self.log_dir / 'import.log').open('wb') as log:
@@ -238,7 +268,7 @@ def main():
                     self.message('Starting game. Logs: ' + str(self.log_dir))
                     with (self.log_dir / 'game.log').open('wb') as log:
                         code, _ = self.runner.run([game, dest / 'game/EBOOT.ELF'],
-                                                  cwd=dest, env=package.game_env(dest, self.log_dir, hud, display), log=log)
+                                                  cwd=dest, env=package.game_env(dest, self.log_dir, hud, display, self.controls), log=log)
                     self.message('Game closed.' if code == 0 else 'Game exited (%d). Logs: %s' % (code, self.log_dir))
                 except (OSError, ImportError, ValueError) as e:
                     self.message(str(e) + '\nLogs: ' + str(self.log_dir))
@@ -246,6 +276,123 @@ def main():
                     self.playing = False
                     self.sensitive(True)
             threading.Thread(target=worker, daemon=False).start()
+
+        def save_settings(self, changes):
+            saved.update(changes)
+            saved['controls'] = self.controls
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(json.dumps(saved, indent=2))
+
+        def show_controls(self, _):
+            dialog = Gtk.Dialog(title='Keyboard and mouse controls', transient_for=self.window, modal=True)
+            dialog.add_button('Reset to defaults', 1)
+            dialog.add_button('Cancel', Gtk.ResponseType.CANCEL)
+            dialog.add_button('Save', Gtk.ResponseType.OK)
+            dialog.set_default_size(620, 680)
+            stored = self.controls.get('bindings', {})
+            defaults = {name: [k.strip() for k in default.split(',') if k] for name, _, default in CONTROLS}
+            bindings = {name: list(stored[name]) if isinstance(stored.get(name), list) else list(defaults[name])
+                        for name, _, _ in CONTROLS}
+            labels = {name: label for name, label, _ in CONTROLS}
+            grid = Gtk.Grid(column_spacing=8, row_spacing=6, margin=12)
+            buttons = {}
+
+            def refresh(name):
+                buttons[name].set_label(', '.join(bindings[name]) or '(not set)')
+
+            def capture(name, replace):
+                cap = Gtk.Dialog(title='Press a key', transient_for=dialog, modal=True)
+                cap.add_button('Cancel', Gtk.ResponseType.CANCEL)
+                area = Gtk.EventBox()
+                area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+                text = Gtk.Label(label='Press a key, or click here with a mouse button, for\n' + labels[name])
+                text.set_justify(Gtk.Justification.CENTER)
+                area.add(text)
+                area.set_size_request(420, 150)
+                cap.get_content_area().pack_start(area, True, True, 0)
+                got = []
+
+                def on_key(_, event):
+                    key = sdl_key_name(event)
+                    if key:
+                        got.append(key)
+                        cap.response(Gtk.ResponseType.OK)
+                    return True              # Esc is a key too: it can be bound
+
+                def on_click(_, event):
+                    if event.button in SDL_MOUSE:
+                        got.append(SDL_MOUSE[event.button])
+                        cap.response(Gtk.ResponseType.OK)
+                    return True
+
+                cap.connect('key-press-event', on_key)
+                area.connect('button-press-event', on_click)
+                cap.show_all()
+                cap.run()
+                cap.destroy()
+                if got:
+                    if replace:
+                        bindings[name] = got[:1]
+                    elif got[0] not in bindings[name] and len(bindings[name]) < 6:
+                        bindings[name].append(got[0])
+                    refresh(name)
+
+            def clear(name):
+                bindings[name] = []
+                refresh(name)
+
+            for row, (name, label, _) in enumerate(CONTROLS):
+                grid.attach(Gtk.Label(label=label, xalign=0), 0, row, 1, 1)
+                buttons[name] = Gtk.Button()
+                buttons[name].set_hexpand(True)
+                buttons[name].set_tooltip_text('Click, then press the key or mouse button to use')
+                buttons[name].connect('clicked', lambda _, n=name: capture(n, True))
+                refresh(name)
+                add = Gtk.Button(label='+')
+                add.set_tooltip_text('Add another key')
+                add.connect('clicked', lambda _, n=name: capture(n, False))
+                remove = Gtk.Button(label='Clear')
+                remove.connect('clicked', lambda _, n=name: clear(n))
+                grid.attach(buttons[name], 1, row, 1, 1)
+                grid.attach(add, 2, row, 1, 1)
+                grid.attach(remove, 3, row, 1, 1)
+            row = len(CONTROLS)
+            grid.attach(Gtk.Label(label='Mouse camera sensitivity', xalign=0), 0, row, 1, 1)
+            sens = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.1, 5.0, 0.1)
+            try:
+                sens.set_value(float(self.controls.get('mouse_sensitivity', 1.0)))
+            except (TypeError, ValueError):
+                sens.set_value(1.0)
+            sens.add_mark(1.0, Gtk.PositionType.BOTTOM, None)
+            grid.attach(sens, 1, row, 3, 1)
+            invert = Gtk.CheckButton(label='Invert camera up/down')
+            invert.set_active(bool(self.controls.get('invert_y')))
+            grid.attach(invert, 1, row + 1, 3, 1)
+            note = Gtk.Label(xalign=0)
+            note.set_markup('<small>Click the game window to let the mouse turn the camera; Alt releases it. '
+                            'A controller keeps working alongside.</small>')
+            note.set_line_wrap(True)
+            grid.attach(note, 0, row + 2, 4, 1)
+            scroll = Gtk.ScrolledWindow()
+            scroll.set_vexpand(True)
+            scroll.add(grid)
+            dialog.get_content_area().pack_start(scroll, True, True, 0)
+            dialog.show_all()
+            while True:
+                response = dialog.run()
+                if response == 1:
+                    for name in bindings:
+                        bindings[name] = list(defaults[name])
+                        refresh(name)
+                    sens.set_value(1.0)
+                    invert.set_active(False)
+                    continue
+                if response == Gtk.ResponseType.OK:
+                    self.controls = {'bindings': bindings, 'mouse_sensitivity': round(sens.get_value(), 2),
+                                     'invert_y': invert.get_active()}
+                    self.save_settings({})
+                break
+            dialog.destroy()
 
         def show_credits(self, _):
             dialog = Gtk.Dialog(title='Credits & licenses', transient_for=self.window, modal=True)

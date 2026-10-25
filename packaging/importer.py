@@ -90,6 +90,50 @@ DISPLAY_FILTERS = ('fsr', 'linear')
 RENDER_SCALES = ('1', '2', '3', '4')
 
 
+# Keyboard and mouse controls, in the order the launcher lists them, with
+# the defaults input_bridge.c uses. Each value is a list of SDL key names or
+# Mouse Left/Middle/Right/X1/X2; the launcher writes them to controls.cfg.
+CONTROLS = (
+    ('move_up', 'Move forward', 'W'), ('move_down', 'Move back', 'S'),
+    ('move_left', 'Move left', 'A'), ('move_right', 'Move right', 'D'),
+    ('square', '\u25a1 Square (normal attack)', 'Mouse Left, J'),
+    ('triangle', '\u25b3 Triangle (special move)', 'Mouse Right, I'),
+    ('circle', '\u25cb Circle (special move, confirm)', 'Mouse Middle, L, Return, Keypad Enter'),
+    ('cross', '\u00d7 Cross (jump, back)', 'Space, K, Backspace'),
+    ('l1', 'L1', 'Q'), ('r1', 'R1 (transform)', 'E'),
+    ('l2', 'L2', 'Left Shift'), ('r2', 'R2 (super special)', 'R'),
+    ('l3', 'L3', 'V'), ('r3', 'R3', 'C'),
+    ('up', 'D-pad up', 'Up'), ('down', 'D-pad down', 'Down'),
+    ('left', 'D-pad left', 'Left'), ('right', 'D-pad right', 'Right'),
+    ('start', 'START (pause)', 'Escape'), ('select', 'SELECT', 'Tab'),
+    ('camera_up', 'Camera up (keys)', ''), ('camera_down', 'Camera down (keys)', ''),
+    ('camera_left', 'Camera left (keys)', ''), ('camera_right', 'Camera right (keys)', ''),
+)
+CONTROL_NAMES = {name for name, _, _ in CONTROLS}
+
+
+def binding_ok(key):
+    """One key or mouse button name that controls.cfg can carry."""
+    return 0 < len(key) <= 32 and not any(c in key for c in ',\n\r#') and key == key.strip()
+
+
+def controls_text(controls):
+    """controls.cfg for {'bindings': {name: [keys]}, 'mouse_sensitivity', 'invert_y'}."""
+    bindings = controls.get('bindings', {})
+    out = ['# Battride War Port keyboard and mouse controls, written by the launcher.']
+    for name, _, default in CONTROLS:
+        keys = bindings.get(name)
+        keys = [k for k in keys if binding_ok(k)] if isinstance(keys, list) else [k.strip() for k in default.split(',') if k]
+        out.append('%s = %s' % (name, ', '.join(keys)))
+    try:
+        sens = min(max(float(controls.get('mouse_sensitivity', 1.0)), 0.1), 10.0)
+    except (TypeError, ValueError):
+        sens = 1.0
+    out.append('mouse_sensitivity = %.2f' % sens)
+    out.append('invert_y = %d' % (1 if controls.get('invert_y') else 0))
+    return '\n'.join(out) + '\n'
+
+
 def display_env(display):
     """Environment for a {'mode', 'size', 'filter', 'scale'} choice; unknown values are dropped."""
     env = {}
@@ -517,7 +561,7 @@ class Package:
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
-    def game_env(self, data, logs, mangohud=False, display=None):
+    def game_env(self, data, logs, mangohud=False, display=None, controls=None):
         env = os.environ.copy()
         # Keep developer diagnostics and automated controller input out of the
         # portable player's launch, even if inherited from a build terminal.
@@ -532,6 +576,10 @@ class Package:
                    PS3RECOMP_VK_WINDOW='1', PORT_GCM_EXPAND_BUFFERS='0',
                    PORT_FRAME_TIMES=str(logs / 'frames.csv'))
         env.update(display_env(display or {}))
+        if controls is not None:
+            path = Path(data) / 'controls.cfg'
+            path.write_text(controls_text(controls))
+            env['PORT_CONTROLS'] = str(path)
         if mangohud:
             env.update(MANGOHUD='1', MANGOHUD_CONFIG='fps,frametime,frame_timing,cpu_stats,gpu_stats,ram,vram')
         else:
