@@ -71,6 +71,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <errno.h>
 
 /* ---------------------------------------------------------------------------
  * Run-time loaded entry points (Vulkan 1.0 core only)
@@ -4632,6 +4634,8 @@ static int vk_init_all(u32 width, u32 height, const char* title)
     return 0;
 }
 
+void port_thread_affinity_start(void);
+
 int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
 {
     memset(&s_vk, 0, sizeof s_vk);
@@ -4639,6 +4643,7 @@ int rsx_vulkan_backend_init(u32 width, u32 height, const char* title)
         rsx_vulkan_backend_shutdown();
         return -1;
     }
+    port_thread_affinity_start();   /* thread_affinity.c */
     /* One path at a time: the FIFO walker feeds both the rsx_state vtable
      * and the register-file engine, so registering both would record every
      * draw twice (the rule the Metal backend's init follows).
@@ -4775,9 +4780,36 @@ void rsx_vulkan_backend_present(void)
     rsx_vulkan_backend_present_finish();
 }
 
+/* PORT_FPS_LIMIT=<fps>: hold each guest frame to at most that rate. The
+ * frame clock calls the present at each guest flip and drains the FIFO after
+ * it, so waiting here holds the guest at its next fence. 0 or unset: no limit. */
+static void vk_frame_limit(void)
+{
+    static long long interval = -1, next;
+    if (interval < 0) {
+        const char* e = getenv("PORT_FPS_LIMIT");
+        const double fps = e ? atof(e) : 0.0;
+        interval = fps >= 1.0 && fps <= 1000.0 ? (long long)(1e9 / fps) : 0;
+        if (interval) printf("[RSX vulkan] frame limit %.1f fps\n", fps);
+    }
+    if (!interval) return;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    const long long now = ts.tv_sec * 1000000000LL + ts.tv_nsec;
+    if (next > now) {
+        ts.tv_sec = next / 1000000000LL;
+        ts.tv_nsec = next % 1000000000LL;
+        while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) == EINTR) {}
+        next += interval;
+    } else {
+        next = now + interval;           /* late: no catch-up burst */
+    }
+}
+
 void rsx_vulkan_backend_present_begin(void)
 {
     if (!s_vk.device) return;
+    vk_frame_limit();
     s_vk.present_split = 1;
     if (s_vk.eng_active) rsx_draw_engine_present();
     else                 vk_cb_present(&s_vk, 0);

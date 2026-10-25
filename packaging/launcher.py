@@ -48,6 +48,12 @@ def host_env():
     return env
 
 
+def gamemode_command():
+    """The host's gamemoderun (Feral GameMode), or None when it is not installed."""
+    import shutil
+    return shutil.which('gamemoderun', path=host_env().get('PATH'))
+
+
 def open_folder(path):
     try:
         subprocess.Popen(['xdg-open', str(path)], env=host_env(), start_new_session=True,
@@ -201,7 +207,7 @@ def main():
             self.log_current = None
             self.controls = saved.get('controls', {}) if isinstance(saved.get('controls'), dict) else {}
             self.win = Adw.ApplicationWindow(application=app, title='Battride War Port')
-            self.win.set_default_size(780, 760)
+            self.win.set_default_size(880, 780)
             self.win.connect('close-request', self.close)
 
             header = Adw.HeaderBar()
@@ -350,10 +356,17 @@ def main():
             self.hud = switch_row('MangoHud overlay', 'Frame rate and frame times, if MangoHud is installed',
                                   saved.get('mangohud'))
             perf.add(self.hud)
+            self.gamemode_path = gamemode_command()
+            self.gamemode = switch_row('GameMode', 'Raises CPU clocks and priority while playing (Feral GameMode)'
+                                       if self.gamemode_path else 'Install the gamemode package to use it',
+                                       saved.get('gamemode', True) and self.gamemode_path)
+            self.gamemode.set_sensitive(bool(self.gamemode_path))
+            perf.add(self.gamemode)
             page.add(perf)
             for row in (self.mode, self.size, self.filter, self.scale):
                 row.connect('notify::selected', lambda *_: self.settings_changed())
             self.hud.switch.connect('notify::active', lambda *_: self.settings_changed())
+            self.gamemode.switch.connect('notify::active', lambda *_: self.settings_changed())
             self.size.set_sensitive(self.mode.value() != 'borderless')
             self.lockable += [screen, render, perf]
             return page
@@ -364,7 +377,8 @@ def main():
 
         def settings_changed(self):
             self.size.set_sensitive(self.mode.value() != 'borderless')
-            self.save_settings({'display': self.display_settings(), 'mangohud': self.hud.switch.get_active()})
+            self.save_settings({'display': self.display_settings(), 'mangohud': self.hud.switch.get_active(),
+                                'gamemode': self.gamemode.switch.get_active()})
 
         # --- Keyboard page -----------------------------------------------------------
 
@@ -713,6 +727,7 @@ def main():
                 return
             self.runner = Runner()
             hud = self.hud.switch.get_active()
+            prefix = [self.gamemode_path] if self.gamemode_path and self.gamemode.switch.get_active() else []
             display = self.display_settings()
             controls = self.controls
             self.log_dir = dest / 'logs' / (time.strftime('%Y%m%d-%H%M%S') + '-' + str(os.getpid()))
@@ -739,7 +754,7 @@ def main():
                     self.playing = True
                     self.message('Starting game. Logs: ' + str(log_dir))
                     with (log_dir / 'game.log').open('wb') as log:
-                        code, _ = self.runner.run([game, dest / 'game/EBOOT.ELF'], cwd=dest,
+                        code, _ = self.runner.run([*prefix, game, dest / 'game/EBOOT.ELF'], cwd=dest,
                                                   env=package.game_env(dest, log_dir, hud, display, controls),
                                                   log=log)
                     self.message('Game closed.' if code == 0 else 'Game exited (%d). Logs: %s' % (code, log_dir))

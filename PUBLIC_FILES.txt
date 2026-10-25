@@ -61,6 +61,7 @@ tests/test_vertex_decode.cpp
 tests/test_vertex_decode.sh
 tests/test_vmx_simd.cpp
 tests/test_vmx_simd.sh
+thread_affinity.c
 third_party/fsr1/LICENSE.txt
 third_party/fsr1/ffx_a.h
 third_party/fsr1/ffx_fsr1.h
