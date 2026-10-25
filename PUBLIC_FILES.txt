@@ -64,6 +64,9 @@ tests/test_vmx_simd.sh
 third_party/fsr1/LICENSE.txt
 third_party/fsr1/ffx_a.h
 third_party/fsr1/ffx_fsr1.h
+third_party/SDL_GameControllerDB/COMMIT
+third_party/SDL_GameControllerDB/LICENSE
+third_party/SDL_GameControllerDB/gamecontrollerdb.txt
 vulkan_bridge.c
 docs/APPIMAGE.md
 packaging/build-image/Containerfile
@@ -78,3 +81,5 @@ scripts/build_fsr1_shaders.py
 scripts/build_appimage.py
 scripts/collect_sources.py
 tests/test_importer.py
+tests/test_input_bridge.c
+tests/test_input_bridge.sh

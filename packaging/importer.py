@@ -111,6 +111,28 @@ CONTROLS = (
 )
 CONTROL_NAMES = {name for name, _, _ in CONTROLS}
 
+# Controller buttons (input_bridge.c's names, SDL's positional layout) and the
+# PS3 button each one is read as by default; '' leaves a PS3 button unbound.
+PAD_BUTTONS = (
+    ('A', 'A / Cross (bottom)'), ('B', 'B / Circle (right)'), ('X', 'X / Square (left)'),
+    ('Y', 'Y / Triangle (top)'), ('LB', 'LB / L1'), ('RB', 'RB / R1'), ('LT', 'LT / L2'), ('RT', 'RT / R2'),
+    ('L3', 'Left stick press'), ('R3', 'Right stick press'), ('Start', 'Start / Options'),
+    ('Back', 'Back / Share / Select'), ('Guide', 'Guide / PS / Home'),
+    ('Up', 'D-pad up'), ('Down', 'D-pad down'), ('Left', 'D-pad left'), ('Right', 'D-pad right'),
+    ('Misc', 'Capture / Mute / Share (extra)'), ('Touchpad', 'Touchpad press'),
+    ('Paddle1', 'Paddle 1'), ('Paddle2', 'Paddle 2'), ('Paddle3', 'Paddle 3'), ('Paddle4', 'Paddle 4'),
+    ('', 'Not set'),
+)
+PAD_CONTROLS = (
+    ('pad_cross', '\u00d7 Cross', 'A'), ('pad_circle', '\u25cb Circle', 'B'),
+    ('pad_square', '\u25a1 Square', 'X'), ('pad_triangle', '\u25b3 Triangle', 'Y'),
+    ('pad_l1', 'L1', 'LB'), ('pad_r1', 'R1', 'RB'), ('pad_l2', 'L2', 'LT'), ('pad_r2', 'R2', 'RT'),
+    ('pad_l3', 'L3', 'L3'), ('pad_r3', 'R3', 'R3'), ('pad_start', 'START', 'Start'), ('pad_select', 'SELECT', 'Back'),
+    ('pad_up', 'D-pad up', 'Up'), ('pad_down', 'D-pad down', 'Down'),
+    ('pad_left', 'D-pad left', 'Left'), ('pad_right', 'D-pad right', 'Right'),
+)
+STICK_DEADZONE = 0.15
+
 
 def binding_ok(key):
     """One key or mouse button name that controls.cfg can carry."""
@@ -118,7 +140,8 @@ def binding_ok(key):
 
 
 def controls_text(controls):
-    """controls.cfg for {'bindings': {name: [keys]}, 'mouse_sensitivity', 'invert_y'}."""
+    """controls.cfg for {'bindings': {name: [keys]}, 'mouse_sensitivity', 'invert_y',
+    'pad': {name: button}, 'stick_deadzone'}."""
     bindings = controls.get('bindings', {})
     out = ['# Battride War Port keyboard and mouse controls, written by the launcher.']
     for name, _, default in CONTROLS:
@@ -131,6 +154,15 @@ def controls_text(controls):
         sens = 1.0
     out.append('mouse_sensitivity = %.2f' % sens)
     out.append('invert_y = %d' % (1 if controls.get('invert_y') else 0))
+    pad = controls.get('pad') if isinstance(controls.get('pad'), dict) else {}
+    buttons = {key for key, _ in PAD_BUTTONS}
+    for name, _, default in PAD_CONTROLS:
+        out.append('%s = %s' % (name, pad[name] if pad.get(name) in buttons else default))
+    try:
+        deadzone = min(max(float(controls.get('stick_deadzone', STICK_DEADZONE)), 0.0), 0.5)
+    except (TypeError, ValueError):
+        deadzone = STICK_DEADZONE
+    out.append('stick_deadzone = %.2f' % deadzone)
     return '\n'.join(out) + '\n'
 
 
@@ -463,9 +495,20 @@ class Package:
             return None
         return path
 
+    def sources_sha256(self):
+        """The port sources this AppImage builds, so a rebuilt AppImage of the same version rebuilds the game."""
+        if not hasattr(self, '_sources_sha256'):
+            h = hashlib.sha256()
+            port = self.root / 'usr/share/battride/port'
+            for f in sorted(p for p in port.rglob('*') if p.is_file()) if port.is_dir() else ():
+                h.update(str(f.relative_to(port)).encode() + b'\0' + f.read_bytes() + b'\0')
+            self._sources_sha256 = h.hexdigest()
+        return self._sources_sha256
+
     def build_identity(self):
         return {'recipe': BUILD_RECIPE, 'package': self.meta['version'], 'sdk': self.meta['sdk_commit'],
-                'elf_sha256': self.meta['elf_sha256'], 'cpu': cpu_identity(), 'pgo': self.profiles() is not None}
+                'elf_sha256': self.meta['elf_sha256'], 'sources': self.sources_sha256(), 'cpu': cpu_identity(),
+                'pgo': self.profiles() is not None}
 
     def built_runner(self, data):
         """The game built on this computer, or None when it must be (re)built."""
@@ -580,6 +623,10 @@ class Package:
             path = Path(data) / 'controls.cfg'
             path.write_text(controls_text(controls))
             env['PORT_CONTROLS'] = str(path)
+        # Mappings for controllers newer than the bundled SDL.
+        db = self.root / 'usr/share/battride/port/third_party/SDL_GameControllerDB/gamecontrollerdb.txt'
+        if db.is_file():
+            env['PORT_CONTROLLER_DB'] = str(db)
         if mangohud:
             env.update(MANGOHUD='1', MANGOHUD_CONFIG='fps,frametime,frame_timing,cpu_stats,gpu_stats,ram,vram')
         else:

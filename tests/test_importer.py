@@ -66,6 +66,10 @@ class ImporterTests(unittest.TestCase):
             other=dict(p.build_identity(),cpu={'model':'other','flags_sha256':'x'})
             (data/'runner/build.json').write_text(json.dumps(other))
             self.assertIsNone(p.built_runner(data))
+            # Same version, changed port sources: rebuild.
+            (data/'runner/build.json').write_text(json.dumps(p.build_identity()))
+            (root/'usr/share/battride/port').mkdir(parents=True);(root/'usr/share/battride/port/input_bridge.c').write_text('x')
+            self.assertIsNone(m.Package(root).built_runner(data))
     def test_wrong_local_rpcs3_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);(root/'app').mkdir()
@@ -114,7 +118,14 @@ class ImporterTests(unittest.TestCase):
         self.assertIn('cross = \n',text)
         self.assertIn('mouse_sensitivity = 10.00\n',text)
         self.assertIn('invert_y = 1\n',text)
-        self.assertEqual(len([l for l in text.splitlines() if ' = ' in l]),len(m.CONTROLS)+2)
+        self.assertIn('pad_cross = A\n',text)
+        self.assertIn('stick_deadzone = 0.15\n',text)
+        self.assertEqual(len([l for l in text.splitlines() if ' = ' in l]),len(m.CONTROLS)+len(m.PAD_CONTROLS)+3)
+        text=m.controls_text({'pad':{'pad_cross':'B','pad_circle':'evil\nx','pad_l2':''},'stick_deadzone':3})
+        self.assertIn('pad_cross = B\n',text)
+        self.assertIn('pad_circle = B\n',text)
+        self.assertIn('pad_l2 = \n',text)
+        self.assertIn('stick_deadzone = 0.50\n',text)
     def test_build_jobs_positive(self):
         self.assertGreaterEqual(m.build_jobs(),1)
 
