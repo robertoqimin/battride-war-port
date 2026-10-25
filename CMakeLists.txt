@@ -342,6 +342,11 @@ if(NOT PORT_PGO STREQUAL "off")
     if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         message(FATAL_ERROR "PORT_PGO currently requires GCC for C++")
     endif()
+    # Profile files are named after each object's path relative to the build
+    # directory, so profiles trained in one tree apply to a build in another
+    # (the AppImage builds in a fresh directory on the player's computer).
+    target_compile_options(${PROJECT_NAME} PRIVATE
+        "$<$<COMPILE_LANGUAGE:CXX>:-fprofile-prefix-path=${CMAKE_CURRENT_BINARY_DIR}>")
     if(PORT_PGO STREQUAL "generate")
         target_compile_options(${PROJECT_NAME} PRIVATE
             "$<$<COMPILE_LANGUAGE:CXX>:-fprofile-generate=${PORT_PGO_DIR}>"

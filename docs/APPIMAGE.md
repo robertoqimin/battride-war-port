@@ -1,17 +1,17 @@
 # Linux AppImage
 
-The AppImage contains **no game code or data**. It carries the port's public sources (exactly the files in `PUBLIC_FILES.txt`), the pinned ps3recomp SDK, 7-Zip, FFmpeg and a compiler toolchain. On first launch it downloads the official RPCS3 build to decrypt your EBOOT, imports your disc, translates your own EBOOT into C and compiles the game for your CPU. Corresponding source for every bundled binary is published next to the AppImage on each release page (`BattrideWarPort-v<version>-sources.tar`; see [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)). It runs on distributions with glibc 2.35 or newer; see "System requirements" in the [README](../README.md) for CPUs, GPUs, RAM and disk. It has been run end to end on Fedora (Ryzen 5 4600H, GTX 1650); the RPCS3, 7-Zip and FFmpeg helpers were also started inside Ubuntu 22.04. Other distributions and GPUs require testing. It does not fix the remaining combat performance drops.
+The AppImage contains **no game code or assets**. It includes GCC optimization profiles: counts of how often each branch of the translated code ran while the developer played the opening mission, which make the build on your computer faster. They contain no game code, text, graphics or sound. (see "Optimization profiles" below). It carries the port's public sources (exactly the files in `PUBLIC_FILES.txt`), the pinned ps3recomp SDK, 7-Zip, FFmpeg and a compiler toolchain. On first launch it downloads the official RPCS3 build to decrypt your EBOOT, imports your disc, translates your own EBOOT into C and compiles the game for your CPU. Corresponding source for every bundled binary is published next to the AppImage on each release page (`BattrideWarPort-v<version>-sources.tar`; see [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)). It runs on distributions with glibc 2.35 or newer; see "System requirements" in the [README](../README.md) for CPUs, GPUs, RAM and disk. It has been run end to end on Fedora (Ryzen 5 4600H, GTX 1650); the RPCS3, 7-Zip and FFmpeg helpers were also started inside Ubuntu 22.04. Other distributions and GPUs require testing. It does not fix the remaining combat performance drops.
 
 ## Run
 
 Make the AppImage executable and open it:
 
 ```sh
-chmod +x BattrideWarPort-v0.3.2-x86_64.AppImage
-./BattrideWarPort-v0.3.2-x86_64.AppImage
+chmod +x BattrideWarPort-v0.4.0-x86_64.AppImage
+./BattrideWarPort-v0.4.0-x86_64.AppImage
 ```
 
-If FUSE is unavailable, run `./BattrideWarPort-v0.3.2-x86_64.AppImage --appimage-extract-and-run`.
+If FUSE is unavailable, run `./BattrideWarPort-v0.4.0-x86_64.AppImage --appimage-extract-and-run`.
 
 Select the Japan BLJS10220 ISO and click **Import ISO & Play**. The first launch:
 
@@ -29,8 +29,8 @@ On laptops with two GPUs the game picks the discrete one. If it picks the wrong 
 Headless checks:
 
 ```sh
-./BattrideWarPort-v0.3.2-x86_64.AppImage --check    # helpers and build tools start
-./BattrideWarPort-v0.3.2-x86_64.AppImage --import-only /path/game.iso --data-dir /new/empty/data   # import and build
+./BattrideWarPort-v0.4.0-x86_64.AppImage --check    # helpers and build tools start
+./BattrideWarPort-v0.4.0-x86_64.AppImage --import-only /path/game.iso --data-dir /new/empty/data   # import and build
 ```
 
 ## Build the AppImage
@@ -44,13 +44,15 @@ podman run --rm --userns=keep-id --security-opt label=disable \
   -v "$G:$G" -v /path/inputs:/path/inputs:ro -w "$PWD" battride-build:ubuntu22.04 \
   python3 scripts/build_appimage.py \
     --runtime /path/inputs/runtime-x86_64 \
-    --sevenzip-dir /path/inputs/7zip-linux --stage build-appimage/v0.3.2/AppDir \
-    --output dist/BattrideWarPort-v0.3.2-x86_64.AppImage
+    --sevenzip-dir /path/inputs/7zip-linux --stage build-appimage/v0.4.0/AppDir \
+    --pgo build-pgo11/pgo --output dist/BattrideWarPort-v0.4.0-x86_64.AppImage
 # Corresponding source for the release page (runs as container root; needs network):
 podman run --rm --security-opt label=disable -v "$G:$G" -w "$PWD" battride-build:ubuntu22.04 \
-  python3 scripts/collect_sources.py --stage build-appimage/v0.3.2/AppDir \
-    --out dist/BattrideWarPort-v0.3.2-sources.tar --runtime-commit <type2-runtime commit>
+  python3 scripts/collect_sources.py --stage build-appimage/v0.4.0/AppDir \
+    --out dist/BattrideWarPort-v0.4.0-sources.tar --runtime-commit <type2-runtime commit>
 ```
+
+`--pgo` takes GCC profiles trained with the AppImage's own compiler (see "Optimization profiles"); without it the AppImage builds the game without them.
 
 Publish the sources tar with every AppImage, from the same build: `collect_sources.py` maps each file listed in `app/system-files.txt` to its Ubuntu package, downloads the source packages of exactly the installed versions, and adds 7-Zip and the AppImage runtime with the libfuse and squashfuse sources it links.
 
@@ -61,11 +63,23 @@ What goes in:
 - `usr/toolchain/`: assembled by `scripts/appimage_toolchain.py` from the build image's packages: GCC 11, Clang 14, binutils, CMake 3.22, Ninja, patch, the glibc 2.35 and Linux headers, SDL2, Vulkan headers and the static glslang/SPIRV-Tools libraries. The compilers run with `--sysroot`, so the game links against glibc 2.35 whatever the host has; `toolchain.cmake` points CMake at the sysroot, and the package CMake files that hardcode `/usr` are rewritten to follow `CMAKE_SYSROOT`. Tool processes take only glibc and the C++ runtime from the host (`runtime/` holds their other libraries, LLVM 14 included under its own soname).
 - `packaging/glslang-compat`: Ubuntu 22.04's glslang installs neither `glslangConfig.cmake` nor `Public/ResourceLimits.h`; the shim supplies both on top of the packaged static libraries, so the SDK stays unmodified. The local build must report `Vulkan: guest programs available (glslang 11.8.0)`, or the launcher stops.
 
+### Optimization profiles
+
+`usr/share/battride/pgo/` holds GCC profile-guided optimization data: for each compiled function of the translated code, how often each branch was taken while the opening mission was played. The player's build passes `-DPORT_PGO=use`, and GCC lays out and inlines the hot paths accordingly. The files contain counters and checksums of the functions' control flow, no code, text, graphics or sound. `profile.json` records the GCC version, SDK commit and EBOOT they match; the importer uses them only when the SDK and EBOOT match, and `build_appimage.py` refuses profiles made with a different GCC than the bundled one. Objects are named relative to the build directory (`-fprofile-prefix-path`), so the profiles apply in the importer's fresh build directory; the two SDK sources compiled into the game keep the SDK's absolute path in their profile names, and the importer renames those for its own SDK copy.
+
+To produce them, build with the AppImage's toolchain and the importer's options plus `-DPORT_PGO=generate -DPORT_PGO_DIR=build-pgo11/pgo` (configure from the stage's `usr/toolchain/toolchain.cmake`, with its `sysroot/usr/bin` first in `PATH`), then run `python3 scripts/pgo_train.py --build <that build directory>`: two sessions boot the game, pass the menus and the tutorial with scripted input and fight for a minute each, ending with SIGTERM so the training build writes its profiles. The profiles only fit the C++ sources they were trained on; retrain after changing any C++ file of the port, the generated code layout, or the SDK.
+
+Measured on a Ryzen 5 4600H with the bundled GCC 11, four alternating 60-second STG02 combat runs each: 47.9 against 46.4 fps on average, p95 frame time 24.5 against 28.5 ms, frames over 33 ms 3 against 17, worst five seconds 42.9 against 35.4 fps. The same profiles compiled for `znver3`, `skylake` and `x86-64-v2` targets without a single function losing its profile.
+
 The runner is linked with `PORT_PORTABLE=ON`, which hides the static shader-tool symbols (an exported SPIRV-Tools copy can break RADV), and with an `$ORIGIN/lib` RPATH: the launcher copies SDL2 and the libraries it needs from the AppImage (`game_libs` in `app/package.json`) into `runner/lib/`.
 
 Nothing in the AppImage uses `LD_LIBRARY_PATH`. It would leak the bundled libraries into host programs started from it: ninja runs every command through `/bin/sh`, which on Arch-based systems is bash linked against the host's newer readline, and the bundled Ubuntu readline broke it. Instead, `patchelf` gives each bundled executable a relative DT_RPATH (inherited by the libraries it loads), the toolchain's tools point at `usr/toolchain/runtime/`, and libraries with their own RUNPATH (LLVM, libpulse) are rewritten the same way.
 
 The builder refuses existing stage/output paths. It never bundles libc, the dynamic loader, the C++ runtime, the GL/Vulkan loaders, DRM/GBM/LLVM, or the core X11/xcb/Wayland libraries that Mesa and NVIDIA link; those come from the host so they match its GPU driver. Toolkit helpers that are not on every host (GTK, SDL2, xcb-util, xkbcommon) are bundled. RPCS3 runs through its own `AppRun`, which uses RPCS3's `checkrt` C++ runtime on hosts older than it needs. Unresolved imports seen at build time are listed in `app/unresolved-build-libraries.txt` (none are expected). Dependency paths are recorded in `app/library-sources.json`; component hashes are in `app/package.json`. Build-image package documentation (including the toolchain's licenses) is retained, and `app/CREDITS.md` is shown by the launcher's **Credits & licenses** button.
+
+## Performance in 0.4.0
+
+The game is compiled with the optimization profiles above, and the runner has three measured improvements (details in [PERFORMANCE.md](PERFORMANCE.md)): guest lwmutex locks no longer read the clock twice per call, which cut frames over 33 ms by about two thirds; the translated code is backed by transparent huge pages where the kernel allows; and the profiles shorten the busiest moments of combat further. Builds from 0.3.x are rebuilt once on first launch.
 
 ## Arch-based distributions in 0.3.2
 

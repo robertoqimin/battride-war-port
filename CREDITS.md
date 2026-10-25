@@ -4,7 +4,7 @@ Battride War Port exists thanks to the people and projects below. Licenses and r
 
 ## The game
 
-**Kamen Rider: Battride War** (Japan, BLJS10220), developed by Eighting and published in 2013 by Namco Bandai Games (now Bandai Namco Entertainment). Kamen Rider belongs to Ishimori Productions and Toei. This project is not affiliated with or endorsed by any of them, and contains none of their code or data: players use their own disc.
+**Kamen Rider: Battride War** (Japan, BLJS10220), developed by Eighting and published in 2013 by Namco Bandai Games (now Bandai Namco Entertainment). Kamen Rider belongs to Ishimori Productions and Toei. This project is not affiliated with or endorsed by any of them, and contains none of their code or assets: players use their own disc. The AppImage includes GCC optimization profiles, execution counts recorded by running the translated code; they contain no code, text, graphics or sound.
 
 ## Port
 

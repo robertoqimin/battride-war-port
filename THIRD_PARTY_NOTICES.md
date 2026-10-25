@@ -30,7 +30,7 @@ RPCS3 was used as a reference for firmware interfaces and, in the local developm
 
 ## AppImage
 
-The AppImage (see [docs/APPIMAGE.md](docs/APPIMAGE.md)) contains no game code or data. People and projects are credited in [CREDITS.md](CREDITS.md).
+The AppImage (see [docs/APPIMAGE.md](docs/APPIMAGE.md)) contains no game code or assets. It includes GCC optimization profiles: counts of how often each branch of the translated code ran while the developer played the opening mission, which make the build on your computer faster. They contain no game code, text, graphics or sound. People and projects are credited in [CREDITS.md](CREDITS.md).
 
 **Corresponding source.** Every release that carries the AppImage also carries `BattrideWarPort-v<version>-sources.tar` on the same release page, produced by `scripts/collect_sources.py` from the same build. It holds the complete source of every third-party binary in the AppImage, with a `SOURCES.md` index:
 

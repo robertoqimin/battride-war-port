@@ -74,6 +74,30 @@ class ImporterTests(unittest.TestCase):
             fake=root/'r.AppImage';fake.write_bytes(b'bad')
             with self.assertRaisesRegex(m.ImportError,'not the expected build'):
                 m.Package(root).rpcs3_helper(root/'data',m.Runner(),local=fake)
+    def test_profiles_used_only_for_same_sdk_and_eboot(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);(root/'app').mkdir()
+            (root/'app/package.json').write_text(json.dumps({'version':'1','sdk_commit':'s','elf_sha256':'e','codecs':{}}))
+            (root/'app/disc-manifest.json').write_text('{}')
+            p=m.Package(root)
+            self.assertIsNone(p.profiles())
+            self.assertFalse(p.build_identity()['pgo'])
+            pgo=root/'usr/share/battride/pgo';pgo.mkdir(parents=True)
+            (pgo/'profile.json').write_text(json.dumps({'sdk_commit':'other','eboot_sha256':'e'}))
+            self.assertIsNone(p.profiles())
+            (pgo/'profile.json').write_text(json.dumps({'sdk_commit':'s','eboot_sha256':'e'}))
+            self.assertEqual(p.profiles(),pgo)
+            self.assertTrue(p.build_identity()['pgo'])
+    def test_profiles_renamed_for_this_sdk_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src=Path(tmp)/'pgo';src.mkdir()
+            (src/'profile.json').write_text(json.dumps({'sdk_dir':'/home/a/ps3recomp'}))
+            (src/'CMakeFiles#x.dir#home#a#ps3recomp#runtime#ppu#ppu_hle.cpp.gcda').write_bytes(b'1')
+            (src/'CMakeFiles#x.dir#src#recomp#ppu_recomp_000.cpp.gcda').write_bytes(b'2')
+            out=m.place_profiles(src,Path(tmp)/'work/pgo',Path('/tmp/.mount_X/usr/share/battride/ps3recomp'))
+            self.assertEqual(sorted(f.name for f in out.glob('*.gcda')),
+                sorted(['CMakeFiles#x.dir#src#recomp#ppu_recomp_000.cpp.gcda',
+                        'CMakeFiles#x.dir#tmp#.mount_X#usr#share#battride#ps3recomp#runtime#ppu#ppu_hle.cpp.gcda']))
     def test_build_jobs_positive(self):
         self.assertGreaterEqual(m.build_jobs(),1)
 

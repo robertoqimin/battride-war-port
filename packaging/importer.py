@@ -60,9 +60,26 @@ def download(url, dest, expected_sha256, expected_size, cancelled, status=lambda
 
 
 # Bump when the local build recipe changes, so existing runners are rebuilt.
-BUILD_RECIPE = 2
+BUILD_RECIPE = 3
 # Peak memory of one compiler job on the largest generated PPU chunk, rounded up.
 BUILD_JOB_MEMORY = 2 * 1024**3
+
+
+def place_profiles(source, dest, sdk):
+    """Copy the shipped GCC profiles for this build.
+
+    Profiles are named after each object's path. Objects of sources inside the
+    port tree are named relative to the build directory, but the few SDK
+    sources compiled into the game keep the SDK's absolute path, which differs
+    here: rename those from the training machine's SDK path to this one."""
+    shutil.copytree(source, dest)
+    trained = json.loads((dest / 'profile.json').read_text()).get('sdk_dir', '')
+    if trained:
+        old, new = trained.replace('/', '#'), str(sdk).replace('/', '#')
+        for f in dest.glob('*.gcda'):
+            if old in f.name:
+                f.rename(f.with_name(f.name.replace(old, new)))
+    return dest
 
 
 def cpu_identity():
@@ -365,9 +382,23 @@ class Package:
                    LC_ALL='C.UTF-8', PS3_DEV_FLASH=str(Path(data) / 'firmware/dev_flash'))
         return env
 
+    def profiles(self):
+        """GCC profiles shipped for this game and this toolchain, or None.
+
+        They are execution counts recorded by running the translated code
+        (scripts/pgo_train.py), applied when compiling it on this computer."""
+        path = self.root / 'usr/share/battride/pgo'
+        try:
+            info = json.loads((path / 'profile.json').read_text())
+        except (OSError, ValueError):
+            return None
+        if info.get('sdk_commit') != self.meta['sdk_commit'] or info.get('eboot_sha256') != self.meta['elf_sha256']:
+            return None
+        return path
+
     def build_identity(self):
         return {'recipe': BUILD_RECIPE, 'package': self.meta['version'], 'sdk': self.meta['sdk_commit'],
-                'elf_sha256': self.meta['elf_sha256'], 'cpu': cpu_identity()}
+                'elf_sha256': self.meta['elf_sha256'], 'cpu': cpu_identity(), 'pgo': self.profiles() is not None}
 
     def built_runner(self, data):
         """The game built on this computer, or None when it must be (re)built."""
@@ -383,7 +414,8 @@ class Package:
         """Translate the imported EBOOT and compile the game for this CPU.
 
         Nothing from the game is shipped: the PPU/SPU sources are generated
-        from the user's own disc and compiled here with the bundled toolchain.
+        from the user's own disc and compiled here with the bundled toolchain,
+        guided by the shipped GCC profiles when they match.
         """
         data = Path(data).resolve()
         existing = self.built_runner(data)
@@ -411,6 +443,9 @@ class Package:
             if code:
                 raise ImportError('Translating the game code failed. See build.log.')
             build = work / 'build'
+            profiles = self.profiles()
+            if profiles:
+                profiles = place_profiles(profiles, work / 'pgo', sdk)
             lines = []
             code, _ = runner.run([self.root / 'usr/toolchain/sysroot/usr/bin/cmake', '-S', port, '-B', build,
                                   '-G', 'Ninja', '-DCMAKE_TOOLCHAIN_FILE=' + str(self.root / 'usr/toolchain/toolchain.cmake'),
@@ -418,7 +453,8 @@ class Package:
                                   '-DPORT_ENABLE_SPU=ON', '-DPS3RECOMP_RSX_VULKAN=ON', '-DPORT_MARCH=native',
                                   '-DPORT_PORTABLE=ON', '-DPS3RECOMP_DIR=' + str(sdk),
                                   '-DPython3_EXECUTABLE=' + str(python),
-                                  '-Dglslang_DIR=' + str(port / 'packaging/glslang-compat')],
+                                  '-Dglslang_DIR=' + str(port / 'packaging/glslang-compat'),
+                                  *(['-DPORT_PGO=use', '-DPORT_PGO_DIR=' + str(profiles)] if profiles else [])],
                                  env=env, log=log, on_line=lines.append)
             if code:
                 raise ImportError('Configuring the game build failed. See build.log.')

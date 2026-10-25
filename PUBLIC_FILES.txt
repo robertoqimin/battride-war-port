@@ -32,6 +32,7 @@ scripts/export_source.py
 scripts/frame_report.py
 scripts/generate.py
 scripts/lift_audio_spu.py
+scripts/pgo_train.py
 spu_bridge.c
 spu_channels_bridge.c
 spu_coherency_bridge.c

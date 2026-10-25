@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Build the public AppImage inside the documented Ubuntu 22.04 build image.
 
-The AppImage carries no game code or data. It ships the port's public sources,
+The AppImage carries no game code or assets (only optional GCC profiles,
+execution counts of the translated code). It ships the port's public sources,
 the pinned ps3recomp SDK and a compiler toolchain; the launcher translates the
 player's own EBOOT and compiles the game on their computer."""
 import argparse
@@ -26,6 +27,7 @@ ap.add_argument('--runtime',type=Path,required=True)
 ap.add_argument('--output',type=Path,required=True)
 ap.add_argument('--stage',type=Path,default=Path('build-appimage/portable/AppDir'))
 ap.add_argument('--sdk',type=Path,help='ps3recomp git checkout (default: ../ps3recomp)')
+ap.add_argument('--pgo',type=Path,help='GCC profiles trained with scripts/pgo_train.py on a build with this toolchain')
 args=ap.parse_args()
 P=Path(__file__).resolve().parents[1];S=args.stage.resolve()
 if S.exists() or args.output.exists():raise SystemExit('Choose new stage and output paths; existing files are preserved.')
@@ -76,6 +78,19 @@ with tarfile.open(fileobj=io.BytesIO(archive)) as tar:tar.extractall(S/'usr/shar
 (S/'usr/share/battride/ps3recomp/.ps3recomp-commit').write_text(spec['sdk_commit']+'\n')
 print('Assembling the compiler toolchain...',flush=True)
 appimage_toolchain.assemble(S/'usr/toolchain')
+# Optional GCC profiles: execution counts of the translated code, which the
+# player's build applies (PORT_PGO=use). They only fit the compiler, SDK and
+# EBOOT they were trained with.
+if args.pgo:
+    info=json.loads((args.pgo/'profile.json').read_text())
+    gcc=subprocess.check_output([str(S/'usr/toolchain/sysroot/usr/bin/x86_64-linux-gnu-g++-11'),'-dumpfullversion'],text=True).strip()
+    if (info['gcc'],info['sdk_commit'],info['eboot_sha256'])!=(gcc,spec['sdk_commit'],spec['eboot_sha256']):
+        raise SystemExit('The profiles in %s were trained with GCC %s, SDK %s; this build uses GCC %s, SDK %s.'
+                         %(args.pgo,info['gcc'],info['sdk_commit'],gcc,spec['sdk_commit']))
+    files=sorted(args.pgo.rglob('*.gcda'))
+    if len(files)!=info['files']:raise SystemExit('profile.json lists %d profiles, found %d'%(info['files'],len(files)))
+    for f in files:copy(f,S/'usr/share/battride/pgo'/f.relative_to(args.pgo))
+    copy(args.pgo/'profile.json',S/'usr/share/battride/pgo/profile.json')
 copy(sys.executable,S/'usr/bin/python3')
 version='%d.%d'%sys.version_info[:2]
 copytree(sysconfig.get_path('stdlib'),S/'usr/lib'/('python'+version),ignore=shutil.ignore_patterns('site-packages','dist-packages','__pycache__','test','tests','idlelib','ensurepip','venv'))
@@ -135,9 +150,9 @@ for p in sorted((P/'game/PS3_GAME').rglob('*')):
 p=P/'game/PS3_DISC.SFB'
 if p.exists():manifest['PS3_DISC.SFB']={'size':p.stat().st_size,'sha256':sha(p)}
 (S/'app/disc-manifest.json').write_text(json.dumps(manifest,separators=(',',':')))
-meta={'version':'0.3.2','glibc_min':'2.35','cpu':'built on the player computer, -march=native','elf_sha256':spec['eboot_sha256'],
+meta={'version':'0.4.0','glibc_min':'2.35','cpu':'built on the player computer, -march=native','elf_sha256':spec['eboot_sha256'],
       'sdk_commit':spec['sdk_commit'],'rpcs3':json.loads((P/'packaging/rpcs3.json').read_text()),'codecs':{p.name:sha(p) for p in (P/'firmware/dev_flash/sys/external').glob('*.pic')},
-      'game_libs':game_libs,'sevenzip_sha256':sha(S/'usr/bin/7z'),'runtime_sha256':sha(args.runtime)}
+      'game_libs':game_libs,'sevenzip_sha256':sha(S/'usr/bin/7z'),'runtime_sha256':sha(args.runtime),'pgo':args.pgo is not None}
 (S/'app/package.json').write_text(json.dumps(meta,indent=2));(S/'app/library-sources.json').write_text(json.dumps(bom,indent=2))
 # Exact Ubuntu package versions in the build image, for the corresponding sources.
 system_files.update(appimage_toolchain.COPIED)
