@@ -82,6 +82,25 @@ def place_profiles(source, dest, sdk):
     return dest
 
 
+# Display settings the launcher offers, passed to the game's window
+# (vulkan_bridge.c: PORT_DISPLAY_MODE, PORT_DISPLAY_SIZE, PORT_DISPLAY_FILTER).
+DISPLAY_MODES = ('windowed', 'borderless', 'fullscreen')
+DISPLAY_FILTERS = ('fsr', 'linear')
+
+
+def display_env(display):
+    """Environment for a {'mode', 'size', 'filter'} choice; unknown values are dropped."""
+    env = {}
+    if display.get('mode') in DISPLAY_MODES:
+        env['PORT_DISPLAY_MODE'] = display['mode']
+    size = str(display.get('size', ''))
+    if re.fullmatch(r'[1-9][0-9]{2,4}x[1-9][0-9]{2,4}', size):
+        env['PORT_DISPLAY_SIZE'] = size
+    if display.get('filter') in DISPLAY_FILTERS:
+        env['PORT_DISPLAY_FILTER'] = display['filter']
+    return env
+
+
 def cpu_identity():
     """The runner is built with -march=native: rebuild it if the data folder moves to another CPU."""
     model, flags = '', ''
@@ -494,7 +513,7 @@ class Package:
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
-    def game_env(self, data, logs, mangohud=False):
+    def game_env(self, data, logs, mangohud=False, display=None):
         env = os.environ.copy()
         # Keep developer diagnostics and automated controller input out of the
         # portable player's launch, even if inherited from a build terminal.
@@ -508,6 +527,7 @@ class Package:
                    PS3_DEV_FLASH=str(data / 'firmware/dev_flash'), PS3RECOMP_VK_GUEST_PROGRAMS='1',
                    PS3RECOMP_VK_WINDOW='1', PORT_GCM_EXPAND_BUFFERS='0',
                    PORT_FRAME_TIMES=str(logs / 'frames.csv'))
+        env.update(display_env(display or {}))
         if mangohud:
             env.update(MANGOHUD='1', MANGOHUD_CONFIG='fps,frametime,frame_timing,cpu_stats,gpu_stats,ram,vram')
         else:

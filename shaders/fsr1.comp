@@ -1,0 +1,54 @@
+#version 450
+// AMD FidelityFX Super Resolution 1.0 for the window present: EASU upscales
+// the game's frame to the window's size, RCAS sharpens the result. Built
+// twice by scripts/build_fsr1_shaders.py, with FSR1_EASU or FSR1_RCAS, into
+// fsr1_spv.h; vulkan_bridge.c runs the two passes (vk_fsr_record). The
+// integration follows the GLSL path of AMD's FSR sample (FSR_Pass.glsl).
+#extension GL_GOOGLE_include_directive : enable
+
+layout(push_constant) uniform Constants { uvec4 con0; uvec4 con1; uvec4 con2; uvec4 con3; } pc;
+
+#define A_GPU 1
+#define A_GLSL 1
+#include "../third_party/fsr1/ffx_a.h"
+
+layout(set = 0, binding = 0) uniform texture2D input_image;
+layout(set = 0, binding = 1) uniform sampler input_sampler;
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D output_image;
+
+#if defined(FSR1_EASU)
+#define FSR_EASU_F 1
+AF4 FsrEasuRF(AF2 p) { return textureGather(sampler2D(input_image, input_sampler), p, 0); }
+AF4 FsrEasuGF(AF2 p) { return textureGather(sampler2D(input_image, input_sampler), p, 1); }
+AF4 FsrEasuBF(AF2 p) { return textureGather(sampler2D(input_image, input_sampler), p, 2); }
+#elif defined(FSR1_RCAS)
+#define FSR_RCAS_F 1
+AF4 FsrRcasLoadF(ASU2 p) { return texelFetch(sampler2D(input_image, input_sampler), p, 0); }
+void FsrRcasInputF(inout AF1 r, inout AF1 g, inout AF1 b) {}
+#else
+#error define FSR1_EASU or FSR1_RCAS
+#endif
+
+#include "../third_party/fsr1/ffx_fsr1.h"
+
+void filter_pixel(AU2 pos)
+{
+    AF3 c;
+#if defined(FSR1_EASU)
+    FsrEasuF(c, pos, pc.con0, pc.con1, pc.con2, pc.con3);
+#else
+    FsrRcasF(c.r, c.g, c.b, pos, pc.con0);
+#endif
+    imageStore(output_image, ASU2(pos), AF4(c, 1.0));   // outside the image: no effect
+}
+
+// Each 64-thread group covers a 16x16 tile, four pixels a thread.
+layout(local_size_x = 64) in;
+void main()
+{
+    AU2 pos = ARmp8x8(gl_LocalInvocationID.x) + AU2(gl_WorkGroupID.x << 4u, gl_WorkGroupID.y << 4u);
+    filter_pixel(pos);
+    pos.x += 8u; filter_pixel(pos);
+    pos.y += 8u; filter_pixel(pos);
+    pos.x -= 8u; filter_pixel(pos);
+}

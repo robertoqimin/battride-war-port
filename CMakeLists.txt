@@ -133,7 +133,8 @@ target_sources(ps3recomp_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/gcm_bridge
 get_target_property(PORT_VK_SOURCES ps3recomp_runtime SOURCES)
 list(FILTER PORT_VK_SOURCES EXCLUDE REGEX "libs/video/rsx_vulkan_backend\\.c$")
 set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${PORT_VK_SOURCES}")
-target_sources(ps3recomp_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_bridge.c")
+target_sources(ps3recomp_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_bridge.c"
+                                         "${CMAKE_CURRENT_SOURCE_DIR}/fsr1_bridge.c")
 
 # Port-local render diagnostics; capture only when explicitly triggered.
 get_target_property(PORT_RENDER_SOURCES ps3recomp_runtime SOURCES)

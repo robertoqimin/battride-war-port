@@ -98,6 +98,11 @@ class ImporterTests(unittest.TestCase):
             self.assertEqual(sorted(f.name for f in out.glob('*.gcda')),
                 sorted(['CMakeFiles#x.dir#src#recomp#ppu_recomp_000.cpp.gcda',
                         'CMakeFiles#x.dir#tmp#.mount_X#usr#share#battride#ps3recomp#runtime#ppu#ppu_hle.cpp.gcda']))
+    def test_display_env_accepts_only_known_values(self):
+        self.assertEqual(m.display_env({'mode':'fullscreen','size':'2560x1440','filter':'linear'}),
+            {'PORT_DISPLAY_MODE':'fullscreen','PORT_DISPLAY_SIZE':'2560x1440','PORT_DISPLAY_FILTER':'linear'})
+        self.assertEqual(m.display_env({'mode':'evil; rm','size':'1920x1080 && x','filter':'?'}),{})
+        self.assertEqual(m.display_env({}),{})
     def test_build_jobs_positive(self):
         self.assertGreaterEqual(m.build_jobs(),1)
 

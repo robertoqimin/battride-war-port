@@ -98,13 +98,13 @@
     X(vkCreateDescriptorPool) X(vkDestroyDescriptorPool) X(vkResetDescriptorPool) \
     X(vkAllocateDescriptorSets) X(vkUpdateDescriptorSets) \
     X(vkCreatePipelineLayout) X(vkDestroyPipelineLayout) \
-    X(vkCreateGraphicsPipelines) X(vkDestroyPipeline) \
+    X(vkCreateGraphicsPipelines) X(vkCreateComputePipelines) X(vkDestroyPipeline) \
     X(vkCreateSampler) X(vkDestroySampler) \
     X(vkCmdPipelineBarrier) X(vkCmdClearColorImage) X(vkCmdClearDepthStencilImage) \
     X(vkCmdCopyImageToBuffer) X(vkCmdCopyBufferToImage) X(vkCmdCopyImage) \
     X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdBindPipeline) \
     X(vkCmdBindVertexBuffers) X(vkCmdBindDescriptorSets) X(vkCmdPushConstants) \
-    X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdDraw) \
+    X(vkCmdSetViewport) X(vkCmdSetScissor) X(vkCmdDraw) X(vkCmdDispatch) \
     X(vkCmdSetStencilReference) X(vkCmdSetDepthBounds) \
     X(vkCmdBindIndexBuffer) X(vkCmdDrawIndexed) \
     X(vkCreateSemaphore) X(vkDestroySemaphore) X(vkCmdBlitImage)
@@ -244,6 +244,27 @@ typedef struct vk_state {
     VkSemaphore      sc_done[8];      /* per image: the present waits on it */
     VkSemaphore      sem_acquire;
     double           hold_seconds;
+    /* Display options (PORT_DISPLAY_*, see vk_window_open). */
+    int              display_mode;    /* VK_DISPLAY_* the window is in now  */
+    int              fullscreen_mode; /* what Alt+Enter / F11 switches to   */
+    int              win_w, win_h;    /* windowed size to restore           */
+    int              fs_w, fs_h;      /* exclusive fullscreen video mode    */
+    int              stretch;         /* fill the window, ignoring 16:9     */
+    int              sc_dirty;        /* window resized: rebuild swapchain  */
+    /* FSR 1 upscaling into the window (vk_fsr_*). */
+    int              fsr_mode;        /* PORT_DISPLAY_FILTER: 1 fsr, 0 linear */
+    int              fsr_broken;      /* setup failed: linear from then on  */
+    float            fsr_sharpness;   /* RCAS, in stops (0 the strongest)   */
+    VkDescriptorSetLayout fsr_dsl;
+    VkPipelineLayout fsr_layout;
+    VkPipeline       fsr_easu, fsr_rcas;
+    VkDescriptorPool fsr_pool;
+    VkDescriptorSet  fsr_sets[2];     /* frame -> mid, mid -> out           */
+    VkSampler        fsr_sampler;
+    vk_image         fsr_mid, fsr_out;
+    u32              fsr_w, fsr_h;
+    vk_buffer        fsr_dump;        /* PORT_FSR_DUMP: one output to a PPM */
+    int              fsr_dump_state;  /* 0 not asked, 1 copy pending, 2 done */
 
     const rsx_state* state;           /* live RSX state, for draws       */
     u32              clear_argb;
@@ -1865,6 +1886,78 @@ static void vk_window_drop(const char* why)
     s_vk.windowed = 0;
 }
 
+/* Display modes: a resizable window, a borderless window covering the
+ * desktop at its own resolution, or exclusive fullscreen in a video mode of
+ * its own. The game always renders its 1280x720 frame; the present scales it
+ * into the window keeping 16:9 (black bars elsewhere) unless stretched.
+ *
+ *   PORT_DISPLAY_MODE    windowed (default), borderless or fullscreen
+ *   PORT_DISPLAY_SIZE    WxH: the window size, or the exclusive video mode
+ *                        (the closest the display offers); default 1280x720
+ *                        for a window and the desktop's mode for fullscreen
+ *   PORT_DISPLAY_STRETCH 1 fills the window instead of keeping 16:9
+ *
+ * Alt+Enter and F11 switch between the window and fullscreen (the chosen
+ * fullscreen mode, or borderless when started windowed). The older
+ * PS3RECOMP_VK_FULLSCREEN=1 means borderless. */
+enum { VK_DISPLAY_WINDOWED, VK_DISPLAY_BORDERLESS, VK_DISPLAY_FULLSCREEN };
+
+static Uint32 vk_display_flags(int mode)
+{
+    return mode == VK_DISPLAY_FULLSCREEN ? SDL_WINDOW_FULLSCREEN
+         : mode == VK_DISPLAY_BORDERLESS ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0;
+}
+
+/* Enter a display mode on the open window. Returns 0 on success. */
+static int vk_display_apply(int mode)
+{
+    if (mode == VK_DISPLAY_FULLSCREEN) {
+        SDL_DisplayMode want = { 0 }, got;
+        const int display = SDL_GetWindowDisplayIndex(s_vk.window);
+        if (SDL_GetDesktopDisplayMode(display < 0 ? 0 : display, &want) == 0) {
+            if (s_vk.fs_w > 0 && s_vk.fs_h > 0) { want.w = s_vk.fs_w; want.h = s_vk.fs_h; }
+            if (SDL_GetClosestDisplayMode(display < 0 ? 0 : display, &want, &got))
+                SDL_SetWindowDisplayMode(s_vk.window, &got);
+        }
+    }
+    if (SDL_SetWindowFullscreen(s_vk.window, vk_display_flags(mode)) != 0) {
+        VK_LOG("display mode change failed: %s\n", SDL_GetError());
+        return -1;
+    }
+    if (mode == VK_DISPLAY_WINDOWED) SDL_SetWindowSize(s_vk.window, s_vk.win_w, s_vk.win_h);
+    SDL_ShowCursor(mode == VK_DISPLAY_WINDOWED ? SDL_ENABLE : SDL_DISABLE);
+    s_vk.display_mode = mode;
+    __atomic_store_n(&s_vk.sc_dirty, 1, __ATOMIC_RELEASE);
+    const char* names[] = { "windowed", "borderless fullscreen", "exclusive fullscreen" };
+    VK_LOG("display: %s\n", names[mode]);
+    return 0;
+}
+
+static void vk_display_options(void)
+{
+    const char* m = getenv("PORT_DISPLAY_MODE");
+    s_vk.display_mode = VK_DISPLAY_WINDOWED;
+    if (m && !strcmp(m, "borderless")) s_vk.display_mode = VK_DISPLAY_BORDERLESS;
+    else if (m && !strcmp(m, "fullscreen")) s_vk.display_mode = VK_DISPLAY_FULLSCREEN;
+    else if (!m && vk_env_on("PS3RECOMP_VK_FULLSCREEN")) s_vk.display_mode = VK_DISPLAY_BORDERLESS;
+    s_vk.fullscreen_mode = s_vk.display_mode == VK_DISPLAY_WINDOWED ? VK_DISPLAY_BORDERLESS
+                                                                    : s_vk.display_mode;
+    int w = 0, h = 0;
+    const char* size = getenv("PORT_DISPLAY_SIZE");
+    if (size && sscanf(size, "%dx%d", &w, &h) == 2 && w >= 320 && h >= 180 && w <= 16384 && h <= 16384) {
+        s_vk.fs_w = w; s_vk.fs_h = h;
+    } else {
+        w = (int)s_vk.width; h = (int)s_vk.height;
+    }
+    s_vk.win_w = w; s_vk.win_h = h;
+    s_vk.stretch = vk_env_on("PORT_DISPLAY_STRETCH");
+    const char* filter = getenv("PORT_DISPLAY_FILTER");
+    s_vk.fsr_mode = !(filter && !strcmp(filter, "linear"));
+    const char* sharp = getenv("PORT_FSR_SHARPNESS");
+    s_vk.fsr_sharpness = sharp ? (float)atof(sharp) : 0.2f;
+    if (s_vk.fsr_sharpness < 0.0f) s_vk.fsr_sharpness = 0.0f;
+}
+
 static void vk_window_open(const char* title)
 {
     if (!vk_env_on("PS3RECOMP_VK_WINDOW")) return;
@@ -1872,17 +1965,26 @@ static void vk_window_open(const char* title)
         VK_LOG("window disabled, continuing headless: SDL video init failed: %s\n", SDL_GetError());
         return;
     }
-    Uint32 flags = SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN;
-    if (vk_env_on("PS3RECOMP_VK_FULLSCREEN")) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+    vk_display_options();
+    /* Created as a window, then switched, so exclusive fullscreen can pick
+     * its video mode first and Alt+Enter has a window size to return to. */
     s_vk.window = SDL_CreateWindow(title && title[0] ? title : "ps3recomp",
                                    SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                   (int)s_vk.width, (int)s_vk.height, flags);
+                                   s_vk.win_w, s_vk.win_h,
+                                   SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
+                                   SDL_WINDOW_ALLOW_HIGHDPI);
     s_vk.windowed = 1;          /* so vk_window_drop also shuts SDL video down */
     if (!s_vk.window) {
         char why[256];
         snprintf(why, sizeof why, "SDL_CreateWindow failed: %s", SDL_GetError());
         vk_window_drop(why);
         return;
+    }
+    SDL_SetWindowMinimumSize(s_vk.window, 320, 180);
+    if (s_vk.display_mode != VK_DISPLAY_WINDOWED) {
+        const int mode = s_vk.display_mode;
+        s_vk.display_mode = VK_DISPLAY_WINDOWED;
+        vk_display_apply(mode);
     }
     unsigned n = 0;
     if (!SDL_Vulkan_GetInstanceExtensions(s_vk.window, &n, NULL) || n == 0 || n > 16 ||
@@ -2019,9 +2121,312 @@ static void vk_swapchain_lost(void)
     if (vk_create_swapchain()) vk_window_drop("the swapchain could not be recreated");
 }
 
+/* ---------------------------------------------------------------------------
+ * FSR 1 for the window
+ *
+ * When the window shows the frame larger than the game renders it, the
+ * present upscales with AMD FidelityFX Super Resolution 1.0 instead of a
+ * bilinear blit: EASU (edge-adaptive upscaling) into fsr_mid at the output
+ * size, RCAS (sharpening) into fsr_out, then a 1:1 blit into the swapchain
+ * image, which converts to its format. Compute shaders and constants come
+ * from fsr1_bridge.c. PORT_DISPLAY_FILTER=linear keeps the bilinear blit;
+ * PORT_FSR_SHARPNESS sets RCAS in stops (default 0.2, 0 the strongest).
+ * Any setup failure is logged once and the window keeps the bilinear blit.
+ * -------------------------------------------------------------------------*/
+const uint32_t* port_fsr1_easu_code(size_t* bytes);
+const uint32_t* port_fsr1_rcas_code(size_t* bytes);
+void port_fsr1_easu_constants(uint32_t out[16], uint32_t in_w, uint32_t in_h,
+                              uint32_t out_w, uint32_t out_h);
+void port_fsr1_rcas_constants(uint32_t out[4], float sharpness);
+
+static int vk_fsr_fail(const char* what)
+{
+    VK_LOG("FSR disabled, using bilinear scaling: %s\n", what);
+    s_vk.fsr_broken = 1;
+    return -1;
+}
+
+static int vk_fsr_pipeline(const uint32_t* code, size_t bytes, VkPipeline* out)
+{
+    VkShaderModuleCreateInfo mci = { .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+                                     .codeSize = bytes, .pCode = code };
+    VkShaderModule m;
+    if (pvkCreateShaderModule(s_vk.device, &mci, NULL, &m) != VK_SUCCESS) return -1;
+    VkComputePipelineCreateInfo ci = {
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .stage = { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                   .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = m, .pName = "main" },
+        .layout = s_vk.fsr_layout,
+    };
+    const VkResult r = pvkCreateComputePipelines(s_vk.device, VK_NULL_HANDLE, 1, &ci, NULL, out);
+    pvkDestroyShaderModule(s_vk.device, m, NULL);
+    return r == VK_SUCCESS ? 0 : -1;
+}
+
+/* Pipelines, layout, sampler and descriptor sets, made on first use. */
+static int vk_fsr_init(void)
+{
+    if (s_vk.fsr_easu) return 0;
+    if (s_vk.fsr_broken) return -1;
+    VkFormatProperties fp;
+    pvkGetPhysicalDeviceFormatProperties(s_vk.phys, VK_FORMAT_R8G8B8A8_UNORM, &fp);
+    if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT))
+        return vk_fsr_fail("RGBA8 storage images are not supported");
+    VkSamplerCreateInfo sci = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR, .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+    };
+    if (pvkCreateSampler(s_vk.device, &sci, NULL, &s_vk.fsr_sampler) != VK_SUCCESS)
+        return vk_fsr_fail("vkCreateSampler");
+    const VkDescriptorSetLayoutBinding binds[3] = {
+        { 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, NULL },
+        { 1, VK_DESCRIPTOR_TYPE_SAMPLER,       1, VK_SHADER_STAGE_COMPUTE_BIT, NULL },
+        { 2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, NULL },
+    };
+    VkDescriptorSetLayoutCreateInfo dci = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                                            .bindingCount = 3, .pBindings = binds };
+    if (pvkCreateDescriptorSetLayout(s_vk.device, &dci, NULL, &s_vk.fsr_dsl) != VK_SUCCESS)
+        return vk_fsr_fail("vkCreateDescriptorSetLayout");
+    const VkPushConstantRange push = { VK_SHADER_STAGE_COMPUTE_BIT, 0, 64 };
+    VkPipelineLayoutCreateInfo lci = { .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+                                       .setLayoutCount = 1, .pSetLayouts = &s_vk.fsr_dsl,
+                                       .pushConstantRangeCount = 1, .pPushConstantRanges = &push };
+    if (pvkCreatePipelineLayout(s_vk.device, &lci, NULL, &s_vk.fsr_layout) != VK_SUCCESS)
+        return vk_fsr_fail("vkCreatePipelineLayout");
+    size_t bytes;
+    const uint32_t* code = port_fsr1_easu_code(&bytes);
+    if (vk_fsr_pipeline(code, bytes, &s_vk.fsr_easu)) return vk_fsr_fail("EASU pipeline");
+    code = port_fsr1_rcas_code(&bytes);
+    if (vk_fsr_pipeline(code, bytes, &s_vk.fsr_rcas)) return vk_fsr_fail("RCAS pipeline");
+    const VkDescriptorPoolSize sizes[3] = {
+        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2 }, { VK_DESCRIPTOR_TYPE_SAMPLER, 2 },
+        { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 },
+    };
+    VkDescriptorPoolCreateInfo pci = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                                       .maxSets = 2, .poolSizeCount = 3, .pPoolSizes = sizes };
+    if (pvkCreateDescriptorPool(s_vk.device, &pci, NULL, &s_vk.fsr_pool) != VK_SUCCESS)
+        return vk_fsr_fail("vkCreateDescriptorPool");
+    const VkDescriptorSetLayout layouts[2] = { s_vk.fsr_dsl, s_vk.fsr_dsl };
+    VkDescriptorSetAllocateInfo ai = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                       .descriptorPool = s_vk.fsr_pool, .descriptorSetCount = 2,
+                                       .pSetLayouts = layouts };
+    if (pvkAllocateDescriptorSets(s_vk.device, &ai, s_vk.fsr_sets) != VK_SUCCESS)
+        return vk_fsr_fail("vkAllocateDescriptorSets");
+    VK_LOG("FSR 1 upscaling for the window (RCAS sharpness %.2f)\n", (double)s_vk.fsr_sharpness);
+    return 0;
+}
+
+static void vk_fsr_bind(VkDescriptorSet set, VkImageView in, VkImageView out)
+{
+    const VkDescriptorImageInfo src = { VK_NULL_HANDLE, in, VK_IMAGE_LAYOUT_GENERAL };
+    const VkDescriptorImageInfo smp = { s_vk.fsr_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED };
+    const VkDescriptorImageInfo dst = { VK_NULL_HANDLE, out, VK_IMAGE_LAYOUT_GENERAL };
+    const VkWriteDescriptorSet w[3] = {
+        { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = 0,
+          .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .pImageInfo = &src },
+        { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = 1,
+          .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER, .pImageInfo = &smp },
+        { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = 2,
+          .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .pImageInfo = &dst },
+    };
+    pvkUpdateDescriptorSets(s_vk.device, 3, w, 0, NULL);
+}
+
+/* The two intermediate images at the output size. Only rebuilt when the
+ * size changes (a resize), after the GPU is done with the old ones. */
+static int vk_fsr_targets(u32 w, u32 h)
+{
+    if (s_vk.fsr_w == w && s_vk.fsr_h == h && s_vk.fsr_out.img) return 0;
+    vk_device_idle();
+    vk_destroy_image(&s_vk.fsr_mid);
+    vk_destroy_image(&s_vk.fsr_out);
+    s_vk.fsr_w = s_vk.fsr_h = 0;
+    if (vk_create_image(&s_vk.fsr_mid, VK_FORMAT_R8G8B8A8_UNORM, w, h,
+                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_IMAGE_ASPECT_COLOR_BIT) ||
+        vk_create_image(&s_vk.fsr_out, VK_FORMAT_R8G8B8A8_UNORM, w, h,
+                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT))
+        return vk_fsr_fail("intermediate images");
+    vk_fsr_bind(s_vk.fsr_sets[0], s_vk.color.view, s_vk.fsr_mid.view);
+    vk_fsr_bind(s_vk.fsr_sets[1], s_vk.fsr_mid.view, s_vk.fsr_out.view);
+    s_vk.fsr_w = w; s_vk.fsr_h = h;
+    return 0;
+}
+
+static void vk_fsr_image_barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from,
+                                 VkAccessFlags src_access, VkPipelineStageFlags src_stage,
+                                 VkAccessFlags dst_access, VkPipelineStageFlags dst_stage)
+{
+    VkImageMemoryBarrier b = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = src_access, .dstAccessMask = dst_access,
+        .oldLayout = from, .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = img, .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
+    };
+    pvkCmdPipelineBarrier(cb, src_stage, dst_stage, 0, 0, NULL, 0, NULL, 1, &b);
+}
+
+/* Record EASU and RCAS from the frame into fsr_out at w x h. Returns 0 when
+ * recorded, nonzero to fall back to the bilinear blit. */
+/* PORT_FSR_DUMP=<file>: write one FSR output as a PPM, to check the
+ * upscaler without a screenshot tool. Debug only: it waits for the GPU. */
+static void vk_fsr_dump_write(void)
+{
+    vk_device_idle();
+    vk_invalidate(&s_vk.fsr_dump);
+    FILE* f = fopen(getenv("PORT_FSR_DUMP"), "wb");
+    if (f) {
+        const unsigned char* px = (const unsigned char*)s_vk.fsr_dump.ptr;
+        fprintf(f, "P6\n%u %u\n255\n", s_vk.fsr_w, s_vk.fsr_h);
+        for (size_t i = 0; i < (size_t)s_vk.fsr_w * s_vk.fsr_h; i++) fwrite(px + i * 4, 1, 3, f);
+        fclose(f);
+        VK_LOG("FSR output %ux%u written to %s\n", s_vk.fsr_w, s_vk.fsr_h, getenv("PORT_FSR_DUMP"));
+    }
+    s_vk.fsr_dump_state = 2;
+}
+
+static int vk_fsr_record(VkCommandBuffer cb, u32 w, u32 h)
+{
+    if (!s_vk.fsr_mode || vk_fsr_init() || vk_fsr_targets(w, h)) return -1;
+    if (s_vk.fsr_dump_state == 1) vk_fsr_dump_write();
+    const VkPipelineStageFlags cs = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    /* The frame: written by rendering, transfers and the readback copy. */
+    vk_fsr_image_barrier(cb, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,
+                         VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         VK_ACCESS_SHADER_READ_BIT, cs);
+    vk_fsr_image_barrier(cb, s_vk.fsr_mid.img, VK_IMAGE_LAYOUT_UNDEFINED,
+                         VK_ACCESS_SHADER_READ_BIT, cs, VK_ACCESS_SHADER_WRITE_BIT, cs);
+    uint32_t con[16];
+    port_fsr1_easu_constants(con, s_vk.width, s_vk.height, w, h);
+    const u32 gx = (w + 15u) / 16u, gy = (h + 15u) / 16u;
+    pvkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_vk.fsr_easu);
+    pvkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_vk.fsr_layout, 0, 1, &s_vk.fsr_sets[0], 0, NULL);
+    pvkCmdPushConstants(cb, s_vk.fsr_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof con, con);
+    pvkCmdDispatch(cb, gx, gy, 1);
+    vk_fsr_image_barrier(cb, s_vk.fsr_mid.img, VK_IMAGE_LAYOUT_GENERAL,
+                         VK_ACCESS_SHADER_WRITE_BIT, cs, VK_ACCESS_SHADER_READ_BIT, cs);
+    vk_fsr_image_barrier(cb, s_vk.fsr_out.img, VK_IMAGE_LAYOUT_UNDEFINED,
+                         VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_ACCESS_SHADER_WRITE_BIT, cs);
+    memset(con, 0, sizeof con);
+    port_fsr1_rcas_constants(con, s_vk.fsr_sharpness);
+    pvkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_vk.fsr_rcas);
+    pvkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, s_vk.fsr_layout, 0, 1, &s_vk.fsr_sets[1], 0, NULL);
+    pvkCmdPushConstants(cb, s_vk.fsr_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof con, con);
+    pvkCmdDispatch(cb, gx, gy, 1);
+    vk_fsr_image_barrier(cb, s_vk.fsr_out.img, VK_IMAGE_LAYOUT_GENERAL,
+                         VK_ACCESS_SHADER_WRITE_BIT, cs, VK_ACCESS_TRANSFER_READ_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT);
+    if (s_vk.fsr_dump_state == 0 && getenv("PORT_FSR_DUMP") && s_vk.presented > 600 &&
+        !vk_create_host_buffer(&s_vk.fsr_dump, (VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT)) {
+        const VkBufferImageCopy region = { .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+                                           .imageExtent = { w, h, 1 } };
+        pvkCmdCopyImageToBuffer(cb, s_vk.fsr_out.img, VK_IMAGE_LAYOUT_GENERAL, s_vk.fsr_dump.buf, 1, &region);
+        s_vk.fsr_dump_state = 1;
+    }
+    /* Later writes to the frame wait for these reads, as for the blit. */
+    vk_fsr_image_barrier(cb, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,
+                         0, cs, 0, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    return 0;
+}
+
+static void vk_fsr_destroy(void)
+{
+    if (!s_vk.device) return;
+    vk_destroy_image(&s_vk.fsr_mid);
+    vk_destroy_image(&s_vk.fsr_out);
+    if (s_vk.fsr_dump.buf) vk_destroy_buffer(&s_vk.fsr_dump);
+    if (s_vk.fsr_easu) pvkDestroyPipeline(s_vk.device, s_vk.fsr_easu, NULL);
+    if (s_vk.fsr_rcas) pvkDestroyPipeline(s_vk.device, s_vk.fsr_rcas, NULL);
+    if (s_vk.fsr_layout) pvkDestroyPipelineLayout(s_vk.device, s_vk.fsr_layout, NULL);
+    if (s_vk.fsr_pool) pvkDestroyDescriptorPool(s_vk.device, s_vk.fsr_pool, NULL);
+    if (s_vk.fsr_dsl) pvkDestroyDescriptorSetLayout(s_vk.device, s_vk.fsr_dsl, NULL);
+    if (s_vk.fsr_sampler) pvkDestroySampler(s_vk.device, s_vk.fsr_sampler, NULL);
+    s_vk.fsr_easu = s_vk.fsr_rcas = VK_NULL_HANDLE;
+    s_vk.fsr_layout = VK_NULL_HANDLE; s_vk.fsr_pool = VK_NULL_HANDLE;
+    s_vk.fsr_dsl = VK_NULL_HANDLE; s_vk.fsr_sampler = VK_NULL_HANDLE;
+    s_vk.fsr_w = s_vk.fsr_h = 0;
+}
+
+/* The frame's place in the window: all of it when stretched, otherwise the
+ * largest centred rectangle with the frame's own aspect ratio. */
+static void vk_window_rect(int32_t* x0, int32_t* y0, int32_t* x1, int32_t* y1)
+{
+    const u32 W = s_vk.sc_extent.width, H = s_vk.sc_extent.height;
+    u32 w = W, h = H;
+    if (!s_vk.stretch) {
+        if ((u64)W * s_vk.height > (u64)H * s_vk.width) w = (u32)((u64)H * s_vk.width / s_vk.height);
+        else                                             h = (u32)((u64)W * s_vk.height / s_vk.width);
+        if (!w) w = 1;
+        if (!h) h = 1;
+    }
+    *x0 = (int32_t)((W - w) / 2); *y0 = (int32_t)((H - h) / 2);
+    *x1 = *x0 + (int32_t)w;       *y1 = *y0 + (int32_t)h;
+}
+
+/* Record the frame's blit into swapchain image idx, black around it, and its
+ * transition for presenting. */
+static void vk_window_blit(VkCommandBuffer cb, u32 idx)
+{
+    VkImageMemoryBarrier b = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = 0, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = s_vk.sc_images[idx], .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
+    };
+    pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          0, 0, NULL, 0, NULL, 1, &b);
+    int32_t x0, y0, x1, y1;
+    vk_window_rect(&x0, &y0, &x1, &y1);
+    if (x0 > 0 || y0 > 0) {
+        const VkClearColorValue black = { .float32 = { 0.0f, 0.0f, 0.0f, 1.0f } };
+        const VkImageSubresourceRange all = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+        pvkCmdClearColorImage(cb, s_vk.sc_images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                              &black, 1, &all);
+        VkMemoryBarrier wb = { .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                               .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                               .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT };
+        pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                              0, 1, &wb, 0, NULL, 0, NULL);
+    }
+    const u32 out_w = (u32)(x1 - x0), out_h = (u32)(y1 - y0);
+    /* FSR only enlarges; a window at or below the frame size blits. */
+    const int fsr = (out_w > s_vk.width || out_h > s_vk.height) && !vk_fsr_record(cb, out_w, out_h);
+    VkImageBlit blit = {
+        .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .srcOffsets = { { 0, 0, 0 }, fsr ? (VkOffset3D){ (int32_t)out_w, (int32_t)out_h, 1 }
+                                         : (VkOffset3D){ (int32_t)s_vk.width, (int32_t)s_vk.height, 1 } },
+        .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+        .dstOffsets = { { x0, y0, 0 }, { x1, y1, 1 } },
+    };
+    pvkCmdBlitImage(cb, fsr ? s_vk.fsr_out.img : s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,
+                    s_vk.sc_images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &blit, fsr ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
+    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.dstAccessMask = 0;
+    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                          0, 0, NULL, 0, NULL, 1, &b);
+}
+
+/* A resize or display mode change seen by the event pump. */
+static void vk_window_check_resize(void)
+{
+    if (__atomic_exchange_n(&s_vk.sc_dirty, 0, __ATOMIC_ACQ_REL)) vk_swapchain_lost();
+}
+
 /* Blit the offscreen target into the next swapchain image and present it. */
 static void vk_present_window(void)
 {
+    if (!s_vk.windowed || !s_vk.swapchain) return;
+    vk_window_check_resize();
     if (!s_vk.windowed || !s_vk.swapchain) return;
 
     u32 idx = 0;
@@ -2040,31 +2445,7 @@ static void vk_present_window(void)
                                     .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
     if (pvkBeginCommandBuffer(cb, &bi) != VK_SUCCESS) { VK_LOG("vkBeginCommandBuffer (window) failed\n"); return; }
     vk_barrier_image_on(cb, s_vk.color.img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);
-    VkImageMemoryBarrier b = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask = 0, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = s_vk.sc_images[idx], .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
-    };
-    pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                          0, 0, NULL, 0, NULL, 1, &b);
-    VkImageBlit blit = {
-        .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
-        .srcOffsets = { { 0, 0, 0 }, { (int32_t)s_vk.width, (int32_t)s_vk.height, 1 } },
-        .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
-        .dstOffsets = { { 0, 0, 0 },
-                        { (int32_t)s_vk.sc_extent.width, (int32_t)s_vk.sc_extent.height, 1 } },
-    };
-    pvkCmdBlitImage(cb, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,
-                    s_vk.sc_images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    1, &blit, VK_FILTER_LINEAR);
-    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.dstAccessMask = 0;
-    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                          0, 0, NULL, 0, NULL, 1, &b);
+    vk_window_blit(cb, idx);
     if (pvkEndCommandBuffer(cb) != VK_SUCCESS) { VK_LOG("vkEndCommandBuffer failed\n"); return; }
 
     VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
@@ -2130,37 +2511,15 @@ static void vk_dump_ppm(const unsigned char* rgba)
 static int vk_window_record(VkCommandBuffer cb, u32* idx)
 {
     if (!s_vk.windowed || !s_vk.swapchain) return 0;
+    vk_window_check_resize();
+    if (!s_vk.windowed || !s_vk.swapchain) return 0;
     VkResult r = pvkAcquireNextImageKHR(s_vk.device, s_vk.swapchain, UINT64_MAX,
                                         s_vk.sem_acquire, VK_NULL_HANDLE, idx);
     if (r == VK_ERROR_OUT_OF_DATE_KHR) { vk_swapchain_lost(); return 0; }
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR) {
         VK_LOG("vkAcquireNextImageKHR failed (VkResult %d)\n", (int)r); return 0;
     }
-    VkImageMemoryBarrier b = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask = 0, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = s_vk.sc_images[*idx], .subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 },
-    };
-    pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                          0, 0, NULL, 0, NULL, 1, &b);
-    VkImageBlit blit = {
-        .srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
-        .srcOffsets = { { 0, 0, 0 }, { (int32_t)s_vk.width, (int32_t)s_vk.height, 1 } },
-        .dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
-        .dstOffsets = { { 0, 0, 0 },
-                        { (int32_t)s_vk.sc_extent.width, (int32_t)s_vk.sc_extent.height, 1 } },
-    };
-    pvkCmdBlitImage(cb, s_vk.color.img, VK_IMAGE_LAYOUT_GENERAL,
-                    s_vk.sc_images[*idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    1, &blit, VK_FILTER_LINEAR);
-    b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    b.dstAccessMask = 0;
-    b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    b.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    pvkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                          0, 0, NULL, 0, NULL, 1, &b);
+    vk_window_blit(cb, *idx);
     return 1;
 }
 
@@ -4044,7 +4403,8 @@ static int vk_init_all(u32 width, u32 height, const char* title)
     if (vk_pick_depth_format()) return -1;
     if (vk_create_image(&s_vk.color, VK_FORMAT_R8G8B8A8_UNORM, s_vk.width, s_vk.height,
                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_IMAGE_ASPECT_COLOR_BIT)) return -1;
+                        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,   /* FSR input */
+                        VK_IMAGE_ASPECT_COLOR_BIT)) return -1;
     if (vk_create_image(&s_vk.depth, s_vk.depth_format, s_vk.width, s_vk.height,
                         VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                         VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, s_vk.depth_aspect)) return -1;
@@ -4143,6 +4503,7 @@ void rsx_vulkan_backend_shutdown(void)
         if (s_vk.render_pass) pvkDestroyRenderPass(s_vk.device, s_vk.render_pass, NULL);
         for (u32 u = 0; u < RSX_MAX_TEXTURES; u++) vk_destroy_image(&s_vk.tex[u]);
         vk_destroy_image(&s_vk.dummy);
+        vk_fsr_destroy();
         vk_destroy_image(&s_vk.depth);
         vk_destroy_image(&s_vk.color);
         vk_destroy_buffer(&s_vk.vertices);
@@ -4171,6 +4532,17 @@ int rsx_vulkan_backend_pump_messages(void)
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) quit = 1;
         else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) quit = 1;
+        else if (e.type == SDL_KEYDOWN && !e.key.repeat && s_vk.window &&
+                 (e.key.keysym.sym == SDLK_F11 ||
+                  (e.key.keysym.sym == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT))))
+            vk_display_apply(s_vk.display_mode == VK_DISPLAY_WINDOWED ? s_vk.fullscreen_mode
+                                                                      : VK_DISPLAY_WINDOWED);
+        else if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+            if (s_vk.display_mode == VK_DISPLAY_WINDOWED) {
+                s_vk.win_w = e.window.data1; s_vk.win_h = e.window.data2;
+            }
+            __atomic_store_n(&s_vk.sc_dirty, 1, __ATOMIC_RELEASE);
+        }
     }
     return quit ? -1 : 0;
 }

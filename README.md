@@ -17,6 +17,7 @@ What works in the tested parts:
 - **Saves and data:** game data installation and saves; 21,107 installed files matched the disc byte for byte.
 - **Movies:** PAMF playback through `cellSail`.
 - **Input:** keyboard and controllers through SDL2.
+- **Display:** windowed, borderless fullscreen or exclusive fullscreen at a chosen resolution, with the frame upscaled by AMD FSR 1 and kept at 16:9 (see [Display options](#display-options)).
 
 Known issues ([docs/ISSUES.md](docs/ISSUES.md) has the full list, in Portuguese):
 
@@ -91,6 +92,17 @@ On hosts whose libstdc++ is older than RPCS3 needs (below `GLIBCXX_3.4.32`, e.g.
 
 **For more frames:** set the CPU governor to performance (`powerprofilesctl set performance`), run through `gamemoderun` if GameMode is installed, and keep laptops plugged in.
 
+## Display options
+
+The launcher's **Display** row sets how the game is shown; Alt+Enter or F11 switches between the window and fullscreen while playing, and Esc closes the game.
+
+- **Windowed:** a resizable window, starting at the chosen size.
+- **Borderless fullscreen:** a window covering the desktop at its own resolution.
+- **Fullscreen:** exclusive fullscreen, switching the monitor to the chosen resolution (the closest it offers).
+- **Upscaling:** the game renders its frames at 1280 × 720, as on the PS3. Shown larger, they are upscaled with **AMD FidelityFX Super Resolution 1.0** (edge-adaptive upscaling and sharpening) or plain bilinear filtering. The picture always keeps 16:9, with black bars on other aspect ratios.
+
+Outside the launcher, the same settings are environment variables of the game: `PORT_DISPLAY_MODE` (`windowed`, `borderless`, `fullscreen`), `PORT_DISPLAY_SIZE` (for example `2560x1440`), `PORT_DISPLAY_FILTER` (`fsr`, `linear`), `PORT_DISPLAY_STRETCH=1` to fill the window, and `PORT_FSR_SHARPNESS` (sharpening in stops, default 0.2; 0 is the strongest). Rendering above 1280 × 720 (internal resolution scaling) is not supported yet.
+
 ## Building from source
 
 Follow [docs/BUILD.md](docs/BUILD.md) for Fedora dependencies, the pinned SDK revision, data layout, the EBOOT hash and PPU/SPU generation.
@@ -113,6 +125,7 @@ Generation refuses to overwrite existing results. Expect about 593 MiB of PPU so
 - `main.cpp`: the runner, including the huge-page remapping of the translated code (`PORT_HUGEPAGES=0` disables it) and the PGO training hooks.
 - `sync_bridge.c`: the SDK's Win32 compatibility layer with clock-free zero-timeout waits, used by every guest mutex lock.
 - `gcm_bridge.c`, `rsx_engine_bridge.c`, `vulkan_bridge.c`, `loader_bridge.cpp`: local adaptations of SDK implementations (the official checkout remains separate), including the RSX depth-comparison direction and texture border colours that the shadows need (`PORT_SHADOW_REVERSE=0` restores the SDK behaviour).
+- `fsr1_bridge.c`, `shaders/fsr1.comp`, `fsr1_spv.h`: AMD FSR 1 upscaling for the window, with AMD's headers in `third_party/fsr1/` (`scripts/build_fsr1_shaders.py` regenerates the SPIR-V).
 - `rsx_vertex_bridge.c`: exact SIMD paths for common four-component vertex formats.
 - `include/port_ppu_memory.h`: guarded inline memory access in selected hot PPU chunks; reserved SPU lines and diagnostics retain the original accessors.
 - `spu_bridge.c`: runs the audio task rejected by the static translator, translated where `scripts/lift_audio_spu.py` could and interpreted elsewhere (`PORT_AUDIO_INTERPRET=1` interprets all of it); another SPU image is generated and registered statically.

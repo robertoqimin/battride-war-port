@@ -15,6 +15,8 @@ docs/ISSUES.md
 docs/PERFORMANCE.md
 docs/PUBLISHING.md
 fs_bridge.cpp
+fsr1_bridge.c
+fsr1_spv.h
 gcm_bridge.c
 include/port_ppu_memory.h
 include/ppu_vmx.h
@@ -32,6 +34,7 @@ scripts/frame_report.py
 scripts/generate.py
 scripts/lift_audio_spu.py
 scripts/pgo_train.py
+shaders/fsr1.comp
 spu_bridge.c
 spu_channels_bridge.c
 spu_coherency_bridge.c
@@ -57,6 +60,9 @@ tests/test_vertex_decode.cpp
 tests/test_vertex_decode.sh
 tests/test_vmx_simd.cpp
 tests/test_vmx_simd.sh
+third_party/fsr1/LICENSE.txt
+third_party/fsr1/ffx_a.h
+third_party/fsr1/ffx_fsr1.h
 vulkan_bridge.c
 docs/APPIMAGE.md
 packaging/build-image/Containerfile
@@ -67,6 +73,7 @@ packaging/importer.py
 packaging/launcher.py
 packaging/rpcs3.json
 scripts/appimage_toolchain.py
+scripts/build_fsr1_shaders.py
 scripts/build_appimage.py
 scripts/collect_sources.py
 tests/test_importer.py

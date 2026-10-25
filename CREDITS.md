@@ -24,6 +24,7 @@ Battride War Port exists thanks to the people and projects below. Licenses and r
 ## Runtime libraries and tools in the AppImage
 
 - **SDL2** (Sam Lantinga and contributors): window, input and audio. zlib.
+- **AMD FidelityFX Super Resolution 1.0** (Advanced Micro Devices): upscaling the game to the window. MIT. https://github.com/GPUOpen-Effects/FidelityFX-FSR
 - **Khronos Group**: Vulkan headers, glslang and SPIRV-Tools, used to translate the game's shaders. Apache-2.0 / BSD.
 - **FFmpeg** developers: video playback. LGPL/GPL.
 - **GTK**, **GLib**, **PyGObject**, **pycairo** and **Python** (Python Software Foundation): the launcher.

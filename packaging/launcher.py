@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 
-from importer import ImportError, Package, Runner
+from importer import DISPLAY_FILTERS, DISPLAY_MODES, ImportError, Package, Runner
 
 ROOT = Path(os.environ.get('PORT_APPDIR', Path(__file__).resolve().parents[1]))
 
@@ -72,7 +72,7 @@ def main():
         return
     import gi
     gi.require_version('Gtk', '3.0')
-    from gi.repository import Gtk, GLib
+    from gi.repository import Gtk, GLib, Gdk
 
     config_path = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'battride-war-port/settings.json'
     try:
@@ -81,6 +81,19 @@ def main():
         saved = {}
     if not args.data_dir and saved.get('data'):
         data = Path(saved['data'])
+
+    def display_sizes():
+        """Common 16:9 sizes that fit the largest connected monitor (in device pixels)."""
+        largest = (1920, 1080)
+        screen = Gdk.Display.get_default()
+        if screen:
+            for i in range(screen.get_n_monitors()):
+                monitor = screen.get_monitor(i)
+                g, scale = monitor.get_geometry(), monitor.get_scale_factor()
+                if g.width * g.height * scale * scale > largest[0] * largest[1]:
+                    largest = (g.width * scale, g.height * scale)
+        sizes = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440), (3200, 1800), (3840, 2160)]
+        return ['%dx%d' % (w, h) for w, h in sizes if (w, h) == (1280, 720) or (w <= largest[0] and h <= largest[1])]
 
     class Window:
         def __init__(self):
@@ -115,6 +128,32 @@ def main():
             grid.attach(Gtk.Label(label='Data folder', xalign=0), 0, 1, 1, 1)
             self.data = Gtk.Entry(text=str(data));self.data.set_hexpand(True)
             grid.attach(self.data, 1, 1, 1, 1)
+            display = saved.get('display', {})
+            grid.attach(Gtk.Label(label='Display', xalign=0), 0, 2, 1, 1)
+            row = Gtk.Box(spacing=10)
+            self.mode = Gtk.ComboBoxText()
+            for key, label in (('windowed', 'Windowed'), ('borderless', 'Borderless fullscreen'),
+                               ('fullscreen', 'Fullscreen')):
+                self.mode.append(key, label)
+            self.mode.set_active_id(display.get('mode') if display.get('mode') in DISPLAY_MODES else 'windowed')
+            self.size = Gtk.ComboBoxText()
+            for size in display_sizes():
+                self.size.append(size, size.replace('x', ' × '))
+            if not self.size.set_active_id(display.get('size', '')):
+                self.size.set_active_id('1600x900') or self.size.set_active(0)
+            self.filter = Gtk.ComboBoxText()
+            self.filter.append('fsr', 'FSR 1 upscaling')
+            self.filter.append('linear', 'Bilinear upscaling')
+            self.filter.set_active_id(display.get('filter') if display.get('filter') in DISPLAY_FILTERS else 'fsr')
+            self.mode.connect('changed', lambda _: self.size.set_sensitive(self.mode.get_active_id() != 'borderless'))
+            self.size.set_sensitive(self.mode.get_active_id() != 'borderless')
+            for widget in (self.mode, self.size, self.filter):
+                row.pack_start(widget, False, False, 0)
+            grid.attach(row, 1, 2, 1, 1)
+            hint = Gtk.Label(xalign=0)
+            hint.set_markup('<small>The game renders at 1280 × 720 and is scaled to the window keeping 16:9. '
+                            'Alt+Enter or F11 switches between window and fullscreen while playing.</small>')
+            grid.attach(hint, 1, 3, 1, 1)
             self.hud = Gtk.CheckButton(label='Enable MangoHud (if installed on this PC)')
             box.pack_start(self.hud, False, False, 0)
             actions = Gtk.Box(spacing=10)
@@ -142,7 +181,8 @@ def main():
             def apply():
                 if self.closed:
                     return False
-                for widget in (self.iso, self.data, self.hud, self.start):widget.set_sensitive(enabled)
+                for widget in (self.iso, self.data, self.hud, self.start, self.mode, self.filter):widget.set_sensitive(enabled)
+                self.size.set_sensitive(enabled and self.mode.get_active_id() != 'borderless')
                 self.stop.set_sensitive(not enabled)
                 if enabled:self.progress.set_fraction(0)
                 return False
@@ -162,10 +202,12 @@ def main():
             self.sensitive(False)
             self.runner = Runner()
             hud = self.hud.get_active()
+            display = {'mode': self.mode.get_active_id(), 'size': self.size.get_active_id(),
+                       'filter': self.filter.get_active_id()}
             self.log_dir = dest / 'logs' / (time.strftime('%Y%m%d-%H%M%S') + '-' + str(os.getpid()))
             self.log_dir.mkdir(parents=True, exist_ok=False)
             config_path.parent.mkdir(parents=True, exist_ok=True)
-            config_path.write_text(json.dumps({'iso': iso, 'data': str(dest)}, indent=2))
+            config_path.write_text(json.dumps({'iso': iso, 'data': str(dest), 'display': display}, indent=2))
             def worker():
                 try:
                     with (self.log_dir / 'import.log').open('wb') as log:
@@ -182,7 +224,7 @@ def main():
                     self.message('Starting game. Logs: ' + str(self.log_dir))
                     with (self.log_dir / 'game.log').open('wb') as log:
                         code, _ = self.runner.run([game, dest / 'game/EBOOT.ELF'],
-                                                  cwd=dest, env=package.game_env(dest, self.log_dir, hud), log=log)
+                                                  cwd=dest, env=package.game_env(dest, self.log_dir, hud, display), log=log)
                     self.message('Game closed.' if code == 0 else 'Game exited (%d). Logs: %s' % (code, self.log_dir))
                 except (OSError, ImportError, ValueError) as e:
                     self.message(str(e) + '\nLogs: ' + str(self.log_dir))
