@@ -97,7 +97,7 @@ Generation refuses to overwrite existing results. Expect about 593 MiB of PPU so
 - `include/port_ppu_memory.h`: guarded inline memory access in selected hot PPU chunks; reserved SPU lines and diagnostics retain the original accessors.
 - `rsx_vertex_bridge.c`: exact SIMD paths for common four-component vertex formats.
 - `stubs.cpp`: game HLE adapters, blocking `sys_lwcond`, and the optional graphics buffer expansion.
-- `patches/graphics-command-buffer-init.patch`: minimal integration call to apply after PPU generation.
+- `scripts/generate.py`: after PPU generation, inserts the one integration call `stubs.cpp` needs, located by its guest return address.
 
 Local firmware codecs and their limitations are documented in [README_FIRMWARE.md](README_FIRMWARE.md).
 

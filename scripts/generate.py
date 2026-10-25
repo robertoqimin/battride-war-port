@@ -14,6 +14,28 @@ ROOT = Path(__file__).resolve().parents[1]
 def run(args, **kwargs):
     subprocess.run([str(x) for x in args], check=True, **kwargs)
 
+# The renderer setup call where stubs.cpp's port_expand_graphics_buffers
+# records the title's two graphics command arenas, located by the guest return
+# address of the call that follows it. Only the address is kept here, so the
+# repository holds no translated game code.
+ARENA_HOOK_CHUNK = 'ppu_recomp_015.cpp'
+ARENA_HOOK_RETURN = 'ctx->lr = 0x0045BC64;'
+
+def hook_graphics_buffers(ppu):
+    path = ppu / ARENA_HOOK_CHUNK
+    with open(path, newline='') as f:
+        lines = f.read().split('\n')
+    hits = [i for i, line in enumerate(lines) if ARENA_HOOK_RETURN in line]
+    if len(hits) != 1:
+        raise RuntimeError('graphics buffer hook: expected one call returning to 0x0045BC64 in %s, found %d'
+                           % (ARENA_HOOK_CHUNK, len(hits)))
+    line = lines[hits[0]]
+    indent = line[:len(line) - len(line.lstrip())]
+    lines.insert(hits[0], indent + 'port_expand_graphics_buffers(ctx, (uint32_t)ctx->gpr[31]);')
+    lines.insert(0, 'extern "C" void port_expand_graphics_buffers(struct ppu_context*, unsigned int);')
+    with open(path, 'w', newline='') as f:
+        f.write('\n'.join(lines))
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--sdk', type=Path, default=ROOT.parent / 'ps3recomp')
@@ -64,9 +86,7 @@ def main():
              '--functions', analysis / 'EBOOT.functions.json',
              '--hle-stubs', analysis / 'EBOOT.imports.json', '--output', ppu,
              '--jobs', args.jobs, '--chunk-lines', '80000'])
-        patch = ROOT / 'patches/graphics-command-buffer-init.patch'
-        run(['patch', '--batch', '--fuzz=0', '--dry-run', '-p1', '-i', patch], cwd=stage)
-        run(['patch', '--batch', '--fuzz=0', '-p1', '-i', patch], cwd=stage)
+        hook_graphics_buffers(ppu)
         run([sys.executable, sdk / 'tools/build_spu_workloads.py', '--input', elf,
              '--lifted', spu, '--out', spu / 'spu_workloads.c', '--constructor', '--allow-partial'])
         inventory = json.loads((spu / 'inventory.json').read_text())

@@ -72,7 +72,7 @@ From the port root, in a fresh checkout:
 ../ps3recomp/.venv/bin/python scripts/generate.py --jobs 4
 ```
 
-The script checks the SDK commit and ELF hash, analyzes the executable, generates the 84 PPU files, applies `patches/graphics-command-buffer-init.patch` without fuzz, and generates the accepted SPU programs. It refuses to replace existing `src/recomp/`, `spu/`, or `analysis/regeneration/` directories. Use `--verify-only` to check prerequisites only. For a different SDK location, add `--sdk /path/to/ps3recomp`.
+The script checks the SDK commit and ELF hash, analyzes the executable, generates the 84 PPU files, inserts the graphics buffer integration call (located by the guest return address `0x0045BC64`, so no translated code is kept in the repository), and generates the accepted SPU programs. It refuses to replace existing `src/recomp/`, `spu/`, or `analysis/regeneration/` directories. Use `--verify-only` to check prerequisites only. For a different SDK location, add `--sdk /path/to/ps3recomp`.
 
 PPU generation produces about 593 MiB of sources; also allow space for object files and the executable. On machines with limited RAM, reduce `--jobs` and build parallelism.
 
@@ -95,7 +95,8 @@ ppu_loader.py game/EBOOT.ELF -o <analysis>
 ppu_lifter.py game/EBOOT.ELF --functions <analysis>/EBOOT.functions.json
   --hle-stubs <analysis>/EBOOT.imports.json --output <ppu-sources>
   --jobs 4 --chunk-lines 80000
-patch --batch --fuzz=0 -p1 -i patches/graphics-command-buffer-init.patch
+insert port_expand_graphics_buffers() before the call returning to 0x0045BC64
+  in ppu_recomp_015.cpp (scripts/generate.py)
 build_spu_workloads.py --input game/EBOOT.ELF --lifted <spu-sources>
   --out <spu-sources>/spu_workloads.c --constructor --allow-partial
 scripts/lift_audio_spu.py --sdk <sdk> --elf game/EBOOT.ELF --spu <spu-sources>
