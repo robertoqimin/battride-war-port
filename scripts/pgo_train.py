@@ -61,8 +61,19 @@ def session(binary, work, seconds):
                     pad.write_text('0x2000 60\n')
                     next_press = time.monotonic() + 7
                 time.sleep(.5)
-            pad.write_text('0x0008 40\n')                # START: dismiss the tutorial prompt
-            time.sleep(3)
+            # START dismisses the tutorial prompt that pauses the first fight.
+            # It can appear after the draw count passes the threshold, so press
+            # until the scene moves (a paused frame repeats its draw count);
+            # otherwise the profiles would come from the paused frame.
+            for attempt in range(10):
+                pad.write_text('0x0008 40\n')
+                time.sleep(4)
+                recent = re.findall(r'\[fstat\] flips=30.*?draws=(\d+)/frame',
+                                    log_path.read_text(errors='replace'))[-5:]
+                if len(set(recent)) > 1:
+                    break
+            else:
+                raise SystemExit('The first fight stayed paused; see ' + str(log_path))
             end, next_press = time.monotonic() + seconds, 0
             while time.monotonic() < end:
                 if proc.poll() is not None:
@@ -101,8 +112,17 @@ def main():
         raise SystemExit('Profiles already exist in %s; move them away to start over.' % profiles)
     for n in range(args.sessions):
         print('Training session %d of %d...' % (n + 1, args.sessions), flush=True)
-        with tempfile.TemporaryDirectory(prefix='pgo-train-') as work:
-            session(binary, Path(work), args.seconds)
+        # The scripted menu route sometimes stalls before the fight: start the
+        # session again (the stalled attempt's menu counts stay, harmlessly).
+        for attempt in range(3):
+            with tempfile.TemporaryDirectory(prefix='pgo-train-') as work:
+                try:
+                    session(binary, Path(work), args.seconds)
+                    break
+                except SystemExit as e:
+                    if attempt == 2 or not ('Combat not reached' in str(e) or 'stayed paused' in str(e)):
+                        raise
+                    print('  %s; retrying' % e, flush=True)
     record(build, profiles, spec, elf, args.sessions)
 
 

@@ -499,3 +499,11 @@ if(PORT_PPU_FAST_MEMORY AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU" AND NOT WI
             "-include" "${CMAKE_CURRENT_SOURCE_DIR}/include/port_ppu_memory.h")
     endforeach()
 endif()
+# The same fast path for every other translated store, out of line: the
+# linker sends the chunks' vm_write8/16/32/64 calls to store_wrap.c.
+option(PORT_PPU_WRAP_STORES "Route translated stores through the fast path in store_wrap.c" ON)
+if(PORT_PPU_WRAP_STORES AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU" AND NOT WIN32 AND NOT APPLE)
+    target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/store_wrap.c")
+    target_link_options(${PROJECT_NAME} PRIVATE
+        "-Wl,--wrap=vm_write8,--wrap=vm_write16,--wrap=vm_write32,--wrap=vm_write64")
+endif()

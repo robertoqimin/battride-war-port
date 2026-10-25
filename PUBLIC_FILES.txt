@@ -41,6 +41,7 @@ spu_channels_bridge.c
 spu_coherency_bridge.c
 spu_interp_bridge.c
 stubs.cpp
+store_wrap.c
 sync_bridge.c
 tests/test_frame_report.py
 tests/test_fs_offset.cpp
