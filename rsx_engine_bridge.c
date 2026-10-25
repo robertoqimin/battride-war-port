@@ -1346,7 +1346,21 @@ static void eng_surfaces_wrote(const u32* targets, u32 n_targets)
  * max LOD at [18:7] and min LOD at [30:19], both 4.8 fixed point. RSX's LOD
  * bias, SET_TEXTURE_FILTER [12:0], is not applied: the reference engine
  * leaves it at zero too. */
-static void eng_decode_sampler(u32 filter, u32 wrap, u32 control0,
+/* The border colour a BORDER-wrapped unit returns outside [0,1], for the
+ * cases Vulkan has a fixed colour for: 0 transparent black, 1 opaque black,
+ * 2 opaque white (RSX TEX_BORDER_COLOR is A8R8G8B8). It travels to the
+ * backend in the high nibble of the wrap bytes, whose guest codes use the low
+ * four bits only (vulkan_bridge.c, vk_eng_sampler). This title's character
+ * shadow map is BORDER-wrapped with a white border, depth 1.0: outside the
+ * map nothing occludes. With black every pixel outside it read as shadowed. */
+static u8 eng_border_class(u32 border)
+{
+    if (border == 0xFFFFFFFFu) return 2;
+    if (border == 0xFF000000u) return 1;
+    return 0;
+}
+
+static void eng_decode_sampler(u32 filter, u32 wrap, u32 control0, u32 border,
                                rsx_be_sampler_desc* out)
 {
     const u32 minf = (filter >> 16) & 7u;
@@ -1358,6 +1372,8 @@ static void eng_decode_sampler(u32 filter, u32 wrap, u32 control0,
     out->wrap_s = (u8)(wrap & 0xFu);
     out->wrap_t = (u8)((wrap >> 8) & 0xFu);
     out->wrap_r = (u8)((wrap >> 16) & 0xFu);
+    const u8 border_bits = (u8)(eng_border_class(border) << 4);
+    out->wrap_s |= border_bits; out->wrap_t |= border_bits; out->wrap_r |= border_bits;
     out->min_lod = (float)((control0 >> 19) & 0xFFFu) / 256.0f;
     out->max_lod = out->mip_present ? (float)((control0 >> 7) & 0xFFFu) / 256.0f
                                     : 0.0f;
@@ -2117,7 +2133,7 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
          * aliased surface a store to guest memory, for nothing. */
         if (!t.enabled || !((tex_used >> u) & 1u)) continue;
         mask |= 1u << u;
-        eng_decode_sampler(t.filter, t.wrap, t.control0, &samplers[u]);
+        eng_decode_sampler(t.filter, t.wrap, t.control0, t.border_color, &samplers[u]);
 
         int sampled = -1, own = 0, surface_at = -1;
         for (u32 i = 0; i < g.n_surfaces; i++) {
@@ -2230,7 +2246,7 @@ static u32 sink_bind_vertex_textures(
         if (!((vtex_mask >> u) & 1u)) continue;
         rsx_dsp_vertex_texture vt;
         rsx_dsp_get_vertex_texture(&g.rsx, u, &vt);
-        eng_decode_sampler(vt.filter, vt.wrap, vt.control0, &samplers[u]);
+        eng_decode_sampler(vt.filter, vt.wrap, vt.control0, vt.border_color, &samplers[u]);
         /* A vertex unit has no crossbar, so its remap is the identity. */
         textures[u] = eng_texture_slot(vt.location, vt.offset, vt.format,
                                        vt.width, vt.height, vt.mipmaps,

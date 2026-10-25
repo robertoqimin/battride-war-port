@@ -3640,7 +3640,12 @@ static VkImageView vk_eng_scratch_depth(u32 w, u32 h)
 }
 
 /* rsx_be_sampler_desc is the registers decoded the D3D12 way; the wrap codes
- * stay the guest's 1..8, which vk_gcm_wrap already translates. */
+ * stay the guest's 1..8 in the low nibble, which vk_gcm_wrap already
+ * translates, and the high nibble carries the border colour class from
+ * rsx_engine_bridge.c's eng_border_class. */
+static const VkBorderColor vk_eng_border[3] = {
+    VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK, VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
+    VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE };
 static VkSampler vk_eng_sampler(const rsx_be_sampler_desc* d)
 {
     u32 lo, hi;
@@ -3649,7 +3654,9 @@ static VkSampler vk_eng_sampler(const rsx_be_sampler_desc* d)
                   | ((u64)d->mip_present << 3) | ((u64)(d->wrap_s & 0xF) << 4)
                   | ((u64)(d->wrap_t & 0xF) << 8) | ((u64)(d->wrap_r & 0xF) << 12)
                   | ((u64)(lo >> 16) << 16) | ((u64)(hi >> 16) << 32);
-    for (u32 i = 0; i < s_esamp_count; i++) if (s_esamp[i].key == key) return s_esamp[i].s;
+    const u32 border = (d->wrap_s >> 4) < 3 ? (u32)(d->wrap_s >> 4) : 0u;
+    const u64 full_key = key | ((u64)border << 48);
+    for (u32 i = 0; i < s_esamp_count; i++) if (s_esamp[i].key == full_key) return s_esamp[i].s;
     if (s_esamp_count >= VK_ENG_SAMP_CACHE) return s_vk.sampler;
     float min_lod = d->min_lod, max_lod = d->mip_present ? d->max_lod : d->min_lod;
     if (max_lod < min_lod) max_lod = min_lod;
@@ -3661,10 +3668,10 @@ static VkSampler vk_eng_sampler(const rsx_be_sampler_desc* d)
         .addressModeU = vk_gcm_wrap(d->wrap_s), .addressModeV = vk_gcm_wrap(d->wrap_t),
         .addressModeW = vk_gcm_wrap(d->wrap_r),
         .minLod = min_lod, .maxLod = max_lod,
-        .borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK };
+        .borderColor = vk_eng_border[border] };
     VkSampler smp;
     if (pvkCreateSampler(s_vk.device, &sci, NULL, &smp) != VK_SUCCESS) return s_vk.sampler;
-    s_esamp[s_esamp_count].key = key;
+    s_esamp[s_esamp_count].key = full_key;
     s_esamp[s_esamp_count++].s = smp;
     return smp;
 }
