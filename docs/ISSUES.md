@@ -1,14 +1,14 @@
 # Erros, falhas e problemas reportados
 
-Levantamento de tudo o que foi reportado até 23/10/2026, com a situação atual de cada item. "Resolvido" significa corrigido e medido nos testes feitos; não significa validado no jogo inteiro.
+Levantamento de tudo o que foi reportado até 25/10/2026, com a situação atual de cada item. "Resolvido" significa corrigido e medido nos testes feitos; não significa validado no jogo inteiro.
 
 ## Resumo
 
 | # | Problema | Área | Situação |
 |---|---|---|---|
 | 1 | Estouro do buffer de comandos gráficos (~19 MiB) | Gráficos / sincronização | Resolvido |
-| 2 | FPS muito baixo e variável em combate | Desempenho | Parcial: ~30 fps no combate comum, cai para ~20 com muitos inimigos |
-| 3 | FPS cai ao andar e com multidões | Desempenho | Resolvido (~38 fps de média) |
+| 2 | FPS muito baixo e variável em combate | Desempenho | Resolvido no combate medido (~48 fps de média, pior trecho ~43 fps na AppImage) |
+| 3 | FPS cai ao andar e com multidões | Desempenho | Resolvido (MAILBOX; ver item 2 para os números atuais) |
 | 4 | Áudio com interrupções e estalos | Áudio | Parcial: ainda quebra em combate (teste manual) |
 | 5 | Brilho excessivo intermitente | Gráficos | Não reproduzido (clarões conferidos com o original) |
 | 6 | Cores e efeitos especiais incorretos | Gráficos | Parcial: batem com o original; um artefato de 1 frame visto |
@@ -16,7 +16,7 @@ Levantamento de tudo o que foi reportado até 23/10/2026, com a situação atual
 | 7 | Conclusão de missões | Gameplay | Validado na primeira missão (teste manual) |
 | 8 | Jogo completo não validado | Gameplay | Em aberto |
 | 9 | Estabilidade prolongada | Estabilidade | Parcial (~30 min sem falhas) |
-| 10 | Thread de render do jogo quase saturada | Desempenho | Em aberto (confirmado: ~20 fps com muitos inimigos) |
+| 10 | Thread principal do jogo saturada nas lutas mais cheias | Desempenho | Em aberto (98% de um núcleo nas quedas; ~25 fps relatado antes da v0.4.0, não remedido) |
 | 11 | Áudio depende do firmware local | Áudio | Limitação conhecida |
 | 12 | Codec ATRAC não exercitado | Áudio | Não testado |
 | 13 | Encerramento limpo não validado em todos os caminhos | Estabilidade | Em aberto |
@@ -87,10 +87,10 @@ Só a primeira missão foi concluída; as demais não foram testadas.
 ### 9. Estabilidade prolongada — Parcial
 Houve ~30 min de missão contínua sem travamento e sem erros no log, até o limite de tempo do script de teste. Sessões mais longas, troca de fases e carregamentos repetidos não foram testados.
 
-### 10. Thread de render quase saturada — Em aberto
-Confirmado no teste manual: com muitos inimigos o FPS cai para ~20. A ~30 fps, a thread de render do jogo fica em ~98% de CPU, então cenas mais pesadas podem cair abaixo de 30 fps. Opções:
-- compilar com instruções FMA (`-mfma`, exige CPUs com AVX2/FMA, uma decisão de portabilidade);
-- reduzir as barreiras e render passes por draw no Vulkan.
+### 10. Thread principal do jogo saturada nas lutas mais cheias — Em aberto
+- **Medido (24/10/2026, perfil de CPU por thread em combate pesado na STG02):** sempre que o fps cai abaixo de ~50, a thread PPU principal do jogo fica em 98% de um núcleo; áudio (~45%), FIFO/Vulkan (~50%) e a outra thread PPU (~30%) têm folga. O fps nas quedas depende só da velocidade dessa thread.
+- **Feito desde então** (detalhes em `docs/PERFORMANCE.md`): leituras de relógio removidas dos locks de mutex do jogo (frames acima de 33 ms: 52 → 17), código traduzido em huge pages, e PGO treinado na primeira missão (pior trecho de 5 s: 35 → 43 fps na AppImage). Testados e rejeitados: huge pages na memória do jogo e o caminho rápido de memória em mais blocos gerados.
+- **Ainda em aberto:** um teste manual antes da v0.4.0 relatou ~25 fps nas lutas mais pesadas no Ryzen 5 4600H (~40 fps num Ryzen 7 5700X); não foi remedido com a v0.4.x. Opções restantes: instruções FMA (`-mfma`, uma decisão de portabilidade) e um GCC mais novo no toolchain da AppImage (~+5% medido com o GCC 16).
 
 ### 11. Áudio depende do firmware local — Limitação conhecida
 A tradução do codec MP3 só é gerada se o `flashMP3.pic` local tiver o SHA-256 verificado. Sem ele, o codec fica interpretado e o combate provavelmente volta a ter cortes. Sem nenhum codec, a tarefa de áudio para (ver `README_FIRMWARE.md`).

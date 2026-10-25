@@ -1,6 +1,6 @@
 # Building from the published sources
 
-This package contains port code, configuration, and a small integration patch. Game files, firmware, and complete generated PPU/SPU sources remain on the builder's computer. None of this data is downloaded automatically.
+This package contains port code and configuration. Game files, firmware, and complete generated PPU/SPU sources remain on the builder's computer. None of this data is downloaded automatically.
 
 ## Validated environment
 
@@ -9,7 +9,7 @@ Fedora 44 x86_64, clang 22, GCC 16, CMake 4, Ninja, and NVIDIA GTX 1650. The pro
 The following package names match those used on this Fedora system. Install them in your terminal:
 
 ```bash
-sudo dnf install git patch cmake ninja-build clang gcc-c++ python3 python3-pip \
+sudo dnf install git cmake ninja-build clang gcc-c++ python3 python3-pip \
   sdl2-compat-devel vulkan-headers vulkan-loader \
   glslang glslang-devel spirv-tools-devel pkgconf-pkg-config ffmpeg-free
 ```
@@ -60,11 +60,11 @@ The expected SHA-256 of `game/EBOOT.ELF` is:
 a53b7bca5d47490710ba02af5f885e1219d10c7a1a456fcf6e13a48db668a014
 ```
 
-Check it with `sha256sum game/EBOOT.ELF`. Other executables, updates, or regions have not been validated: the patch and SPU bridge addresses are specific to this version. This repository does not supply an ISO, EBOOT, keys, firmware, assets, or saves.
+Check it with `sha256sum game/EBOOT.ELF`. Other executables, updates, or regions have not been validated: the integration call and SPU bridge addresses are specific to this version. This repository does not supply an ISO, EBOOT, keys, firmware, assets, or saves.
 
 Firmware codecs are optional for building but required for the audio paths used by the game. See [README_FIRMWARE.md](../README_FIRMWARE.md) for the placement of locally obtained files.
 
-## 3. Generate PPU/SPU sources and apply the patch
+## 3. Generate PPU/SPU sources
 
 From the port root, in a fresh checkout:
 
