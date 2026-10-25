@@ -100,12 +100,18 @@ for n in ('gi','cairo'):
 # GTK resources are private; application GIO plugins from the host are disabled.
 copytree('/usr/lib/x86_64-linux-gnu/girepository-1.0',S/'usr/lib/girepository-1.0')
 copy('/usr/share/glib-2.0/schemas/gschemas.compiled',S/'usr/share/glib-2.0/schemas/gschemas.compiled')
+# GTK draws the symbolic icons from SVG through gdk-pixbuf's librsvg loader. The
+# loader cache needs absolute paths, so the launcher fills in this AppImage's mount.
+pixbuf=Path('/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0')
+copy(pixbuf/'loaders/libpixbufloader-svg.so',S/'usr/lib/gdk-pixbuf/libpixbufloader-svg.so')
+entry=next(b for b in (pixbuf/'loaders.cache').read_text().split('\n\n') if 'libpixbufloader-svg.so' in b)
+(S/'usr/lib/gdk-pixbuf/loaders.cache.in').write_text(entry.replace(str(pixbuf/'loaders'),'@LOADERS@').strip()+'\n\n')
 copy(args.sevenzip_dir/'7zz',S/'usr/bin/7z');copy(args.sevenzip_dir/'License.txt',S/'usr/share/licenses/7zip/License.txt')
 for n in ('ffmpeg','ffprobe'):copy('/usr/bin/'+n,S/'usr/bin'/n)
 subprocess.run(['cc','-O2','-march=x86-64','-msse4.1','-Wl,--disable-new-dtags,-rpath,$ORIGIN/../lib',str(P/'packaging/graphics_probe.c'),'-o',str(S/'usr/bin/graphics-probe'),*subprocess.check_output(['pkg-config','--cflags','--libs','sdl2','vulkan'],text=True).split()],check=True)
 seeds=[]
 libdir=Path('/usr/lib/x86_64-linux-gnu')
-for pattern in ('libgtk-3.so.0','libgdk-3.so.0','libgirepository-1.0.so.1','libpulse.so.0','libasound.so.2','libdecor-0.so.0'):
+for pattern in ('libgtk-4.so.1','libadwaita-1.so.0','libgirepository-1.0.so.1','libpulse.so.0','libasound.so.2','libdecor-0.so.0'):
     seeds.extend(libdir.glob(pattern))
 # The toolchain resolves its own libraries (runtime/); the SDK holds a PPU test ELF.
 skip=(str(S/'usr/toolchain'),str(S/'usr/share/battride'))
@@ -150,7 +156,7 @@ for p in sorted((P/'game/PS3_GAME').rglob('*')):
 p=P/'game/PS3_DISC.SFB'
 if p.exists():manifest['PS3_DISC.SFB']={'size':p.stat().st_size,'sha256':sha(p)}
 (S/'app/disc-manifest.json').write_text(json.dumps(manifest,separators=(',',':')))
-meta={'version':'0.4.1','glibc_min':'2.35','cpu':'built on the player computer, -march=native','elf_sha256':spec['eboot_sha256'],
+meta={'version':'0.4.2','glibc_min':'2.35','cpu':'built on the player computer, -march=native','elf_sha256':spec['eboot_sha256'],
       'sdk_commit':spec['sdk_commit'],'rpcs3':json.loads((P/'packaging/rpcs3.json').read_text()),'codecs':{p.name:sha(p) for p in (P/'firmware/dev_flash/sys/external').glob('*.pic')},
       'game_libs':game_libs,'sevenzip_sha256':sha(S/'usr/bin/7z'),'runtime_sha256':sha(args.runtime),'pgo':args.pgo is not None}
 (S/'app/package.json').write_text(json.dumps(meta,indent=2));(S/'app/library-sources.json').write_text(json.dumps(bom,indent=2))
