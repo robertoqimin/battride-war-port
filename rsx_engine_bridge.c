@@ -41,6 +41,7 @@ extern u32 ppu_vm_size;
 /* ------------------------------------------------------------------------- */
 
 #define ENG_MAX_SURFACES   64
+#define ENG_SURFACE_VARIANTS 2   /* colour targets kept per guest address */
 #define ENG_MAX_ZDEPTHS    64
 #define ENG_MAX_TEXTURES   RSX_DRAW_ENGINE_TEXTURE_CACHE
 #define ENG_MAX_VTEXTURES  64
@@ -253,6 +254,21 @@ static u64 eng_fnv1a(const void* data, u32 n, u64 hash)
     const u8* p = (const u8*)data;
     for (u32 i = 0; i < n; i++) { hash ^= p[i]; hash *= 1099511628211ull; }
     return hash;
+}
+
+/* The same role for long inputs, eight bytes a step: a vertex program is
+ * up to 8 KB and was hashed byte by byte for every draw (~800 a frame in
+ * combat). Only an in-memory pipeline identity, never stored. */
+static u64 eng_hash_words(const void* data, u32 n, u64 hash)
+{
+    const u8* p = (const u8*)data;
+    for (; n >= 8; n -= 8, p += 8) {
+        u64 w;
+        memcpy(&w, p, 8);
+        hash = (hash ^ w) * 0x9E3779B97F4A7C15ull;
+        hash ^= hash >> 29;
+    }
+    return eng_fnv1a(p, n, hash);
 }
 
 /* ---- render state -------------------------------------------------------- */
@@ -563,7 +579,14 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
     if (!want_w) want_w = g.width;
     if (!want_h) want_h = g.height;
 
-    u32 slot = ENG_MAX_SURFACES;
+    /* Up to ENG_SURFACE_VARIANTS targets per address. Battride War's shadow
+     * pass names address 0 as a 1024x1024 colour target and the scene then a
+     * 1280x720 one, every frame; with one target per address both were
+     * destroyed and created again each frame (two image allocations a frame,
+     * ~10% of the FIFO walker's time in combat). A second variant keeps both;
+     * past the limit the least recently written one is reused. Lookups by
+     * address take the newest variant (eng_surface_newest). */
+    u32 slot = ENG_MAX_SURFACES, variants = 0;
     for (u32 i = 0; i < g.n_surfaces; i++)
         if (g.surfaces[i].location == location && g.surfaces[i].offset == offset) {
             const eng_surface* s = &g.surfaces[i];
@@ -571,9 +594,11 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
                 ((s->w == want_w && s->h == want_h) ||
                  (pitch && s->pitch == pitch && s->w >= want_w && s->h >= want_h)))
                 return i;
-            slot = i;
-            break;
+            if (slot == ENG_MAX_SURFACES || s->color_serial < g.surfaces[slot].color_serial) slot = i;
+            variants++;
         }
+    if (slot != ENG_MAX_SURFACES && variants < ENG_SURFACE_VARIANTS && g.n_surfaces < ENG_MAX_SURFACES)
+        slot = ENG_MAX_SURFACES;         /* room for another variant: keep the existing one */
 
     /* Never destroy a usable render target because one malformed command
      * decoded a guest pointer as clip dimensions. */
@@ -590,6 +615,15 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
         slot = g.n_surfaces;
     }
 
+    /* PORT_SURFACE_LOG=1: every target created, and what it replaced. */
+    { static int on = -1;
+      if (on < 0) on = getenv("PORT_SURFACE_LOG") ? 1 : 0;
+      if (on) {
+          const eng_surface* old = slot < g.n_surfaces ? &g.surfaces[slot] : NULL;
+          fprintf(stderr, "[surface-new] %u:0x%08X %ux%u fmt %d pitch %u, was %ux%u fmt %d\n",
+                  location, offset, want_w, want_h, (int)want_fmt, pitch,
+                  old ? old->w : 0, old ? old->h : 0, old ? (int)old->fmt : -1);
+      } }
     u32 seed_row = 0;
     const void* seed = eng_surface_seed(location, offset, want_w, want_h,
                                         want_fmt, &seed_row);
@@ -612,6 +646,18 @@ static u32 eng_surface_get(u32 location, u32 offset, u32 want_w, u32 want_h,
                 location, offset, want_w, want_h, (int)want_fmt,
                 seed ? " (seeded from guest memory)" : ""); }
     return slot;
+}
+
+/* The colour target holding what is at (location, offset) now: of the
+ * variants at that address, the one written last. ENG_INVALID if none. */
+static u32 eng_surface_newest(u32 location, u32 offset)
+{
+    u32 best = ENG_INVALID;
+    for (u32 i = 0; i < g.n_surfaces; i++)
+        if (g.surfaces[i].handle && g.surfaces[i].location == location && g.surfaces[i].offset == offset &&
+            (best == ENG_INVALID || g.surfaces[i].color_serial > g.surfaces[best].color_serial))
+            best = i;
+    return best;
 }
 
 /* The colour targets SET_SURFACE_COLOR_TARGET names, as slots into
@@ -691,7 +737,9 @@ static u32 eng_surface_at(u32 location, u32 offset, u32 pitch, u32* xb, u32* y)
         if (!bpp || s->pitch != pitch) continue;
         const u32 d = offset - s->offset;
         if (d / pitch >= s->h || d % pitch >= s->w * bpp) continue;
-        if (best != ENG_INVALID && g.surfaces[best].offset > s->offset) continue;
+        if (best != ENG_INVALID && (g.surfaces[best].offset > s->offset ||
+                                    (g.surfaces[best].offset == s->offset &&
+                                     g.surfaces[best].color_serial >= s->color_serial))) continue;
         best = i;
         *xb = d % pitch;
         *y = d / pitch;
@@ -1732,7 +1780,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
         static const u32 fixed_tag = 0x4E464958u;   /* "XIFN" */
         key = eng_fnv1a(&fixed_tag, sizeof fixed_tag, key);
     } else {
-        key = eng_fnv1a(vp_uc, vp_instrs * 16u, key);
+        key = eng_hash_words(vp_uc, vp_instrs * 16u, key);
         key = rsx_fp_structural_hash(fp_uc, fp_size, key);
         if (!key) return 0;
         const u32 fp_ctrl_key = fp_ctrl & 0x4Eu; /* colour width and fragment depth export */
@@ -1876,6 +1924,20 @@ static int dc_push_ref(u32 vertex_id, u32 base_index)
     return 1;
 }
 
+/* Room for `more` references past the current ones. */
+static int dc_reserve_refs(u32 more)
+{
+    if ((u64)dc.n_refs + more <= dc.cap_refs) return 1;
+    u64 next = dc.cap_refs ? dc.cap_refs : 4096u;
+    while (next < (u64)dc.n_refs + more) next *= 2u;
+    if (next > 0xFFFFFFFFu) return 0;
+    rsx_vertex_ref* r = (rsx_vertex_ref*)realloc(dc.refs, (size_t)next * sizeof(*r));
+    if (!r) return 0;
+    dc.refs = r;
+    dc.cap_refs = (u32)next;
+    return 1;
+}
+
 static int dc_reserve_verts(u64 bytes)
 {
     if (bytes <= dc.verts_cap) return 1;
@@ -1904,8 +1966,44 @@ static int dc_reserve_indices(u32 count)
  * than fetching a phantom vertex wherever the restart sentinel appears, then
  * collapse repeated references and fetch each unique vertex once.
  * rsx_live_draw.c's fetch_batches_hoisted (4165-4292). */
+/* PORT_ENG_PROFILE=1: where sink_end's time goes, printed every 300 draws'
+ * worth of frames as ms per presented frame. Off: one predictable branch. */
+enum { EP_FETCH, EP_TARGETS, EP_PIPELINE, EP_TEXTURES, EP_CONSTANTS, EP_RECORD, EP_F_INDEX, EP_F_REMAP, EP_F_DECODE, EP_N };
+static const char* const ep_names[EP_N] = { "fetch", "targets", "pipeline", "textures", "indices+consts", "record",
+                                          "(fetch: index", "remap", "decode)" };
+static double s_ep_ms[EP_N];
+static unsigned s_ep_draws;
+static int s_ep_on = -1;
+static inline double ep_now(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1e3 + ts.tv_nsec * 1e-6;
+}
+#define EP_MARK(slot) do { if (s_ep_on > 0) { const double _t = ep_now(); s_ep_ms[slot] += _t - ep_t; ep_t = _t; } } while (0)
+
+void port_eng_profile_frame(void)      /* once per presented frame */
+{
+    static unsigned frames;
+    if (s_ep_on <= 0 || ++frames < 120) return;
+    fprintf(stderr, "[eng-profile] per frame over %u frames: %.1f draws", frames, (double)s_ep_draws / frames);
+    double total = 0;
+    for (int i = 0; i < EP_N; i++) {
+        fprintf(stderr, ", %s %.2f ms", ep_names[i], s_ep_ms[i] / frames);
+        if (i < EP_F_INDEX) total += s_ep_ms[i];
+    }
+    fprintf(stderr, ", sink_end %.2f ms\n", total / frames);
+    memset(s_ep_ms, 0, sizeof s_ep_ms);
+    s_ep_draws = 0;
+    frames = 0;
+}
+
+int rsx_vertex_fetch_many(const rsx_vertex_fetch_plan* plan, const rsx_vertex_ref* refs, u32 n,
+                          u8* out);   /* rsx_vertex_bridge.c */
+
 static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
 {
+    double ep_t = s_ep_on > 0 ? ep_now() : 0;
     if (dc.n_immediate) {
         dc.n_source_refs = dc.n_immediate;
         if (!dc_reserve_verts((u64)dc.n_immediate * layout->stride)) {
@@ -1942,6 +2040,32 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
             if (count && start <= 0xFFFFFFFFull && bytes <= 0xFFFFFFFFull &&
                 start + bytes <= 0x100000000ull)
                 run = eng_guest_ptr(NULL, ia_loc, (u32)start, (u32)bytes);
+            /* A contiguous run: one capacity check, then a tight loop the
+             * compiler can vectorise. Same references and cuts as below. */
+            if (run && dc_reserve_refs(count)) {
+                rsx_vertex_ref* out = dc.refs;
+                u32 n = dc.n_refs;
+                for (u32 i = 0; i < count; i++) {
+                    u32 index;
+                    if (ia.is_u32) {
+                        u32 w; memcpy(&w, run + (size_t)i * 4u, 4); index = __builtin_bswap32(w);
+                    } else {
+                        u16 h; memcpy(&h, run + (size_t)i * 2u, 2); index = __builtin_bswap16(h);
+                    }
+                    if (restart_en && index == restart_val) {
+                        if (!rsx_restart_cut_push(&dc.cuts, &dc.n_cuts, &dc.cap_cuts, n)) {
+                            dc.fetch_ok = 0;
+                            break;
+                        }
+                        continue;
+                    }
+                    out[n].vertex_id = index;
+                    out[n].base_index = base_index;
+                    n++;
+                }
+                dc.n_refs = n;
+                continue;
+            }
             for (u32 i = 0; i < count && dc.fetch_ok; i++) {
                 const u8* p = run ? run + (size_t)i * esz
                     : eng_guest_ptr(NULL, ia_loc, ia.offset + (first + i) * esz, esz);
@@ -1959,6 +2083,7 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
             }
         }
     }
+    EP_MARK(EP_F_INDEX);
     if (!dc.fetch_ok) return;
 
     dc.n_source_refs = dc.n_refs;
@@ -1973,6 +2098,7 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
         }
     }
 
+    EP_MARK(EP_F_REMAP);
     dc.layout = *layout;
     rsx_vertex_fetch_plan_init(&dc.fetch_plan, &g.rsx, layout, eng_guest_ptr, NULL);
     rsx_vertex_fetch_plan_set_inline(&dc.fetch_plan, &g.rsx, dc.inl, dc.inl_bytes);
@@ -1981,14 +2107,33 @@ static void dc_fetch(const rsx_vertex_layout_plan* layout, int allow_remap)
         dc.fetch_ok = 0;
         return;
     }
-    for (u32 i = 0; i < dc.n_refs; i++) {
-        u8* dst = layout->stride ? dc.verts + (u64)i * layout->stride : NULL;
-        if (!rsx_vertex_fetch_one(&dc.fetch_plan, &dc.refs[i], dst)) {
-            dc.fetch_ok = 0;
-            return;
-        }
+    if (!rsx_vertex_fetch_many(&dc.fetch_plan, dc.refs, dc.n_refs, layout->stride ? dc.verts : NULL)) {
+        dc.fetch_ok = 0;
+        return;
     }
+    /* PORT_VERTEX_VERIFY=1: check the batch fetch against one call per
+     * vertex, byte for byte. */
+    { static int verify = -1;
+      if (verify < 0) verify = getenv("PORT_VERTEX_VERIFY") ? 1 : 0;
+      if (verify && layout->stride) {
+          static u8* one; static size_t one_cap;
+          static unsigned long checked, bad;
+          if (one_cap < layout->stride) { one = (u8*)realloc(one, layout->stride); one_cap = one ? layout->stride : 0; }
+          for (u32 i = 0; one && i < dc.n_refs; i++) {
+              memset(one, 0xA5, layout->stride);
+              const int ok = rsx_vertex_fetch_one(&dc.fetch_plan, &dc.refs[i], one);
+              checked++;
+              if (!ok || memcmp(one, dc.verts + (u64)i * layout->stride, layout->stride)) {
+                  if (++bad <= 8) fprintf(stderr, "[vertex-verify] mismatch at vertex %u of %u (ok=%d)\n", i, dc.n_refs, ok);
+              }
+          }
+          if (checked >= 2000000) {
+              fprintf(stderr, "[vertex-verify] %lu vertices checked, %lu mismatches\n", checked, bad);
+              checked = 0;
+          }
+      } }
     dc.n_verts = dc.n_refs;
+    EP_MARK(EP_F_DECODE);
 }
 
 /* ---- sink ---------------------------------------------------------------- */
@@ -2136,18 +2281,14 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
         eng_decode_sampler(t.filter, t.wrap, t.control0, t.border_color, &samplers[u]);
 
         int sampled = -1, own = 0, surface_at = -1;
-        for (u32 i = 0; i < g.n_surfaces; i++) {
-            if (!g.surfaces[i].handle || g.surfaces[i].location != t.location ||
-                g.surfaces[i].offset != t.offset)
-                continue;
+        { const u32 i = eng_surface_newest(t.location, t.offset);
+          if (i != ENG_INVALID) {
             surface_at = (int)i;
             /* A current attachment requires an ordered immutable copy; it
              * cannot be sampled directly while the host pass writes it. */
             for (u32 k = 0; k < n_targets; k++) if (target_slots[k] == i) own = 1;
-            if (own) break;
-            sampled = (int)i;
-            break;
-        }
+            if (!own) sampled = (int)i;
+          } }
         const u32 base_fmt = t.format & RSX_TEX_FMT_BASE_MASK & ~(u32)RSX_TEX_FMT_UNNORM;
         /* The depth at this address, when it was written after any colour
          * there: a depth-only pass names its zeta as a colour target too. */
@@ -2536,13 +2677,10 @@ static void pd_note(const u32* targets, u32 n_targets, u32 zslot,
          * of its last write: the newer one is what the binding sampled. */
         char src[48] = "G";
         size_t sl = 0;
-        for (u32 i = 0; i < g.n_surfaces; i++)
-            if (g.surfaces[i].handle && g.surfaces[i].location == t.location &&
-                g.surfaces[i].offset == t.offset) {
-                sl = (size_t)snprintf(src, sizeof src, "S%u@%llu", i,
-                                      (unsigned long long)g.surfaces[i].color_serial);
-                break;
-            }
+        { const u32 i = eng_surface_newest(t.location, t.offset);
+          if (i != ENG_INVALID)
+              sl = (size_t)snprintf(src, sizeof src, "S%u@%llu", i,
+                                    (unsigned long long)g.surfaces[i].color_serial); }
         for (u32 i = 0; i < g.n_zdepths; i++)
             if (g.zdepths[i].location == t.location && g.zdepths[i].offset == t.offset) {
                 snprintf(src + sl, sizeof src - sl, "%sZ%u@%llu", sl ? "," : "", i,
@@ -2583,6 +2721,9 @@ static void pd_present(u32 presented)
 static void sink_end(void* user, const rsx_dispatch* r)
 {
     (void)user; (void)r;
+    if (s_ep_on < 0) s_ep_on = getenv("PORT_ENG_PROFILE") ? 1 : 0;
+    double ep_t = s_ep_on > 0 ? ep_now() : 0;
+    if (s_ep_on > 0) s_ep_draws++;
     if (!g.ready || !dc.n_packets || !dc.fetch_ok) return;
     /* Mixed geometry sources have no defined concatenation here. Reject the
      * whole group instead of drawing partial/misordered geometry. */
@@ -2610,6 +2751,7 @@ static void sink_end(void* user, const rsx_dispatch* r)
     rsx_vertex_layout_plan layout;
     eng_vertex_layout(&layout);
     dc_fetch(&layout, rebuild);
+    EP_MARK(EP_FETCH);
     if (!dc.n_verts || !dc.fetch_ok) return;
 
     int indexed = 0;
@@ -2637,6 +2779,7 @@ static void sink_end(void* user, const rsx_dispatch* r)
     rsx_dsp_get_viewport(&g.rsx, &vp);
     const u32 zslot = eng_zdepth_get(sf.zeta_location, sf.zeta_offset,
                                      sf.clip_w, sf.clip_h);
+    EP_MARK(EP_TARGETS);
 
     /* A guest program pair that will not translate has no fallback: the draw
      * is dropped, as the reference engine drops it. Substituting the built-in
@@ -2649,6 +2792,7 @@ static void sink_end(void* user, const rsx_dispatch* r)
                                           eng_surface_format(sf.color_format),
                                           n_targets, &pipeline_is_fixed, &tex_used,
                                           &fp_hash);
+    EP_MARK(EP_PIPELINE);
     if (!pipeline) return;
     if (fp_hash && eng_debug_fp(fp_hash, pipeline)) return;
 
@@ -2667,6 +2811,7 @@ static void sink_end(void* user, const rsx_dispatch* r)
     if (tex_mask == ENG_INVALID) return;
     const u32 vtex_mask = sink_bind_vertex_textures(eng_vtex_mask(), vtextures,
                                                     vsamplers);
+    EP_MARK(EP_TEXTURES);
 
     if (indexed) {
         if (!dc_reserve_indices(n_draw)) return;
@@ -2714,6 +2859,7 @@ static void sink_end(void* user, const rsx_dispatch* r)
       alpha[0] = rsx_fp_alpha_ref(rs.alpha_ref_raw, rs.alpha_ref_format);
       alpha[1] = alpha[2] = alpha[3] = 0.0f; }
 
+    EP_MARK(EP_CONSTANTS);
     pd_note(targets, n_targets, zslot, &rs, pipeline, tex_mask);
 
     /* The depth attachment is cleared the first time it is bound, so a title
@@ -2781,6 +2927,7 @@ static void sink_end(void* user, const rsx_dispatch* r)
      * the test hook means: a draw through the built-in pair is a draw, not
      * evidence that the decompile-translate-compile path worked. */
     if (!pipeline_is_fixed) g.guest_draws++;
+    EP_MARK(EP_RECORD);
 
     if (rs.color_mask) eng_surfaces_wrote(targets, n_targets);
     if (zslot != ENG_INVALID && rs.depth_test && rs.depth_write) {
@@ -2861,16 +3008,15 @@ static u32 eng_present_surface(u32 buffer_id)
 {
     if (buffer_id < 8 && g.display_buffers[buffer_id].valid) {
         const eng_display_buffer* d = &g.display_buffers[buffer_id];
-        for (u32 i = 0; i < g.n_surfaces; i++)
-            if (g.surfaces[i].handle && g.surfaces[i].location == d->location &&
-                g.surfaces[i].offset == d->offset)
-                return i;
+        const u32 i = eng_surface_newest(d->location, d->offset);
+        if (i != ENG_INVALID) return i;
     }
     return eng_current_surface();
 }
 
 static void eng_present(u32 buffer_id)
 {
+    port_eng_profile_frame();
     if (!g.ready) return;
     const u32 target = eng_present_surface(buffer_id);
     if (target == ENG_INVALID) return;

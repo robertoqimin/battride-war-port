@@ -59,6 +59,8 @@ tests/test_sail_audio.cpp
 tests/test_sail_audio.sh
 tests/test_vertex_decode.cpp
 tests/test_vertex_decode.sh
+tests/test_vertex_remap.c
+tests/test_vertex_remap.sh
 tests/test_vmx_simd.cpp
 tests/test_vmx_simd.sh
 thread_affinity.c

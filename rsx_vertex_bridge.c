@@ -336,6 +336,71 @@ int rsx_vertex_fetch_one(
     return 1;
 }
 
+/* rsx_vertex_fetch_one for n references, attribute by attribute: the format
+ * is looked at once per attribute instead of once per vertex, and float
+ * attributes of one to three components are converted inline. Elements
+ * outside the stable range take rsx_vertex_fetch_one's own path. Output is
+ * byte for byte what n calls of rsx_vertex_fetch_one write
+ * (PORT_VERTEX_VERIFY=1 in rsx_engine_bridge.c checks it). */
+int rsx_vertex_fetch_many(
+    const rsx_vertex_fetch_plan* plan, const rsx_vertex_ref* refs, u32 n, u8* out)
+{
+    if (!plan || (!refs && n))
+        return 0;
+    const u32 stride = plan->layout.stride;
+    if (!out && stride)
+        return 0;
+    for (u32 slot = 0; slot < plan->layout.count; slot++) {
+        const u32 attr = plan->layout.attrs[slot];
+        const rsx_vertex_fetch_attr* fetch = &plan->attr[attr];
+        u8* dst = out + slot * 16u;
+        if (!fetch->desc.type || !fetch->desc.size) {
+            for (u32 i = 0; i < n; i++) memcpy(dst + (u64)i * stride, fetch->default_value, 16);
+            continue;
+        }
+        const u32 type = fetch->desc.type, size = fetch->desc.size;
+        const u32 divider = (plan->divider_mask >> attr) & 1u;
+        const int inline_float = type == RSX_VTX_TYPE_FLOAT && size <= 3;
+        for (u32 i = 0; i < n; i++) {
+            float* value = (float*)(dst + (u64)i * stride);
+            const u32 element = rsx_vertex_element_index(
+                refs[i].vertex_id, refs[i].base_index, fetch->desc.frequency, divider);
+            if (fetch->stable_base &&
+                element >= fetch->stable_first && element <= fetch->stable_last) {
+                const u8* source = fetch->stable_base +
+                    (u64)(element - fetch->stable_first) * fetch->stride;
+                if (inline_float) {
+                    value[0] = rsx_compact_be_f32(source);
+                    value[1] = size > 1 ? rsx_compact_be_f32(source + 4) : 0.0f;
+                    value[2] = size > 2 ? rsx_compact_be_f32(source + 8) : 0.0f;
+                    value[3] = 1.0f;
+                    continue;
+                }
+                if (rsx_vertex_decode_element(type, size, source, value))
+                    continue;
+                if (attr == 0)
+                    return 0;
+                memcpy(value, fetch->default_value, 16);
+                continue;
+            }
+            /* Not in the stable range: exactly rsx_vertex_fetch_one's path. */
+            const u8* source = NULL;
+            if (plan->inline_data) {
+                source = NULL;
+            } else if (plan->guest_ptr) {
+                const u32 offset = plan->base_offset + fetch->desc.offset + element * fetch->stride;
+                source = plan->guest_ptr(plan->guest_user, fetch->desc.location, offset, fetch->elem_size);
+            }
+            if (source && rsx_vertex_decode_element(type, size, source, value))
+                continue;
+            if (attr == 0)
+                return 0;
+            memcpy(value, fetch->default_value, 16);
+        }
+    }
+    return 1;
+}
+
 static u64 rsx_vertex_remap_hash(u64 value)
 {
     value ^= value >> 33;
@@ -363,6 +428,56 @@ int rsx_vertex_remap_build(
             return 0;
         remap->occurrence_to_unique = occurrences;
         remap->occurrence_capacity = count;
+    }
+
+    /* A mesh's references usually share one base index and span a compact
+     * range of vertex ids: number them through a table indexed by the id
+     * instead of hashing. Same result, first-occurrence order included.
+     * Only the FIFO walker's thread builds remaps. */
+    {
+        static __thread u32* stamp;
+        static __thread u32* value;
+        static __thread u32 cap, gen;
+        const u32 base = refs[0].base_index;
+        u32 lo = refs[0].vertex_id, hi = lo, same = 1;
+        for (u32 i = 1; i < count; i++) {
+            const u32 v = refs[i].vertex_id;
+            lo = v < lo ? v : lo;
+            hi = v > hi ? v : hi;
+            same &= refs[i].base_index == base;
+        }
+        const u64 span = (u64)hi - lo + 1u;
+        if (same && span <= (u64)count * 4u + 4096u) {
+            if (span > cap) {
+                u32* ns = (u32*)realloc(stamp, (size_t)span * sizeof(u32));
+                if (ns) stamp = ns;
+                u32* nv = ns ? (u32*)realloc(value, (size_t)span * sizeof(u32)) : NULL;
+                if (nv) value = nv;
+                if (ns && nv) {
+                    memset(stamp, 0, (size_t)span * sizeof(u32));
+                    cap = (u32)span;
+                    gen = 0;
+                }
+            }
+            if (span <= cap) {
+                if (++gen == 0) { memset(stamp, 0, (size_t)cap * sizeof(u32)); gen = 1; }
+                u32 unique = 0;
+                for (u32 occurrence = 0; occurrence < count; occurrence++) {
+                    const rsx_vertex_ref ref = refs[occurrence];
+                    const u32 k = ref.vertex_id - lo;
+                    if (stamp[k] != gen) {
+                        stamp[k] = gen;
+                        value[k] = unique;
+                        refs[unique] = ref;
+                        remap->occurrence_to_unique[occurrence] = unique++;
+                    } else {
+                        remap->occurrence_to_unique[occurrence] = value[k];
+                    }
+                }
+                *unique_count = unique;
+                return 1;
+            }
+        }
     }
 
     if (count > UINT_MAX / 2u)

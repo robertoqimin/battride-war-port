@@ -78,12 +78,24 @@ def run_once(binary, seconds, extra_env, work, stacks=0, pin=0, prefix=()):
                     pad.write_text('0x2000 60\n')
                     next_press = time.monotonic() + 7
                 time.sleep(.5)
-            pad.write_text('0x0008 40\n')                # START: dismiss the tutorial prompt
-            time.sleep(3)
+            # START dismisses the tutorial prompt that pauses the first fight.
+            # It can appear after the draw count first passes the threshold, so
+            # press until the scene moves: a paused frame repeats the same draw
+            # count in every [fstat] line.
+            for attempt in range(10):
+                pad.write_text('0x0008 40\n')
+                time.sleep(4)
+                recent = [int(d) for d in re.findall(r'\[fstat\] flips=30.*?draws=(\d+)/frame',
+                                                     log_path.read_text(errors='replace'))[-5:]]
+                if len(set(recent)) > 1:
+                    break
+            else:
+                raise RuntimeError('the first fight stayed paused; see ' + str(log_path))
             if pin:
                 pin_busiest(proc.pid, pin)
             t0_cpu, t0 = thread_times(proc.pid), time.monotonic()
             t0_ms = (t0 - start) * 1000.0
+            print('combat measured from %.0f s after start' % (t0 - start), flush=True)
             next_press, samples, next_sample = 0, [], t0 + 5
             while time.monotonic() - t0 < seconds:
                 # Diagnostics only: each eu-stack snapshot stops the game briefly.
@@ -108,6 +120,8 @@ def run_once(binary, seconds, extra_env, work, stacks=0, pin=0, prefix=()):
     elapsed = [float(r[1]) for r in rows]
     end = elapsed[-1]
     window = [(float(r[1]), float(r[2])) for r in rows if float(r[1]) >= end - seconds * 1000.0]
+    draws = [int(d) for d in re.findall(r'\[fstat\] flips=30.*?draws=(\d+)/frame', log_path.read_text(errors='replace'))]
+    draws = draws[-max(1, int(len(window) / 30)):]
     # Guest PPU threads log their host thread id; name them after the guest's.
     text = log_path.read_text(errors='replace')
     guest = dict(re.findall(r'sys_ppu_thread_create tid=(\d+) name="([^"]*)"', text))
@@ -120,7 +134,7 @@ def run_once(binary, seconds, extra_env, work, stacks=0, pin=0, prefix=()):
         threads['%s/%d' % (names.get(tid, name), tid)] = 100.0 * (ticks - before) / CLK_TCK / wall
     if samples:
         (work / 'stacks.txt').write_text('\n\n'.join(samples))
-    return window, threads, stack_summary(samples, names) if stacks else {}
+    return window, threads, stack_summary(samples, names) if stacks else {}, draws
 
 
 def physical_cores():
@@ -206,7 +220,7 @@ def main():
             with tempfile.TemporaryDirectory(prefix='bench-') as work:
                 try:
                     try:
-                        window, threads, stacks = run_once(args.binary.resolve(), args.seconds, extra, Path(work),
+                        window, threads, stacks, draws = run_once(args.binary.resolve(), args.seconds, extra, Path(work),
                                                            args.stacks, args.pin, args.prefix.split())
                     finally:
                         if args.keep_logs and (Path(work) / 'run.log').exists():
@@ -216,16 +230,19 @@ def main():
                                 shutil.copy2(Path(work) / 'stacks.txt', args.keep_logs / ('stacks%d.txt' % (n + 1)))
                     break
                 except RuntimeError as e:
-                    if attempt == 2 or 'combat not reached' not in str(e):
+                    if attempt == 2 or not ('combat not reached' in str(e) or 'stayed paused' in str(e)):
                         raise
                     print('run %d: %s; retrying' % (n + 1, e), flush=True)
         s = summarise(window, args.seconds)
+        s['draws'] = {'min': min(draws), 'mean': round(statistics.mean(draws)), 'max': max(draws),
+                      'distinct': len(set(draws))} if draws else {}
         s['threads'] = {k: round(v, 1) for k, v in sorted(threads.items(), key=lambda kv: -kv[1])[:6]}
         if stacks:
             s['stacks'] = {k: stacks[k.rsplit('/', 1)[1]] for k in s['threads'] if k.rsplit('/', 1)[1] in stacks}
         results.append(s)
-        print('run %d: %.1f fps, p95 %.1f ms, >16.7 ms %d, >33 ms %d, 1%% low %.1f, worst 5 s %.1f | %s' % (
+        print('run %d: %.1f fps, p95 %.1f ms, >16.7 ms %d, >33 ms %d, 1%% low %.1f, worst 5 s %.1f, draws %s | %s' % (
             n + 1, s['avg_fps'], s['p95_ms'], s['over_16_7'], s['over_33'], s['low1_fps'], s['worst5_fps'],
+            '%(min)d-%(max)d' % s['draws'] if s['draws'] else '?',
             ', '.join('%s %.0f%%' % kv for kv in list(s['threads'].items())[:4])), flush=True)
     keys = ('avg_fps', 'p95_ms', 'p99_ms', 'over_16_7', 'over_33', 'low1_fps', 'worst5_fps')
     mean = {k: round(statistics.mean(r[k] for r in results), 1) for k in keys}
