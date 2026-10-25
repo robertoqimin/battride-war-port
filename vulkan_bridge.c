@@ -1968,7 +1968,25 @@ static void vk_display_options(void)
 static void vk_window_open(const char* title)
 {
     if (!vk_env_on("PS3RECOMP_VK_WINDOW")) return;
-    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
+    /* On a Wayland session use Wayland. SDL before 2.0.22 (the AppImage
+     * bundles Ubuntu 22.04's 2.0.20) picks X11 when both exist, and through
+     * XWayland the NVIDIA driver offers no MAILBOX present mode, so the
+     * window fell back to vsync-blocking FIFO. An explicit SDL_VIDEODRIVER
+     * is left alone; if Wayland cannot start, SDL's own choice follows. */
+    int forced_wayland = 0;
+    if (getenv("WAYLAND_DISPLAY") && !getenv("SDL_VIDEODRIVER")) {
+        setenv("SDL_VIDEODRIVER", "wayland", 1);
+        forced_wayland = 1;
+    }
+    int video = SDL_InitSubSystem(SDL_INIT_VIDEO);
+    if (forced_wayland) {
+        unsetenv("SDL_VIDEODRIVER");
+        if (video != 0) {
+            VK_LOG("window: Wayland video failed (%s), trying SDL's default\n", SDL_GetError());
+            video = SDL_InitSubSystem(SDL_INIT_VIDEO);
+        }
+    }
+    if (video != 0) {
         VK_LOG("window disabled, continuing headless: SDL video init failed: %s\n", SDL_GetError());
         return;
     }
@@ -2061,17 +2079,24 @@ static int vk_create_swapchain(void)
      * the next vblank and a present never waits for one. FIFO blocks the
      * present -- which runs on the FIFO walker's thread -- until a vblank, so
      * a frame a little over 33 ms waited to 50 ms and missions ran at 20-24
-     * fps instead of 30. PS3RECOMP_VK_VSYNC=1 keeps FIFO. */
+     * fps instead of 30. Without MAILBOX (NVIDIA through XWayland, for one),
+     * IMMEDIATE never waits either, at the cost of possible tearing.
+     * PS3RECOMP_VK_VSYNC=1 keeps FIFO. */
     VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;   /* the one mode every driver has */
     if (!vk_env_on("PS3RECOMP_VK_VSYNC")) {
         u32 nm = 0;
         VkPresentModeKHR modes[16];
+        int mailbox = 0, immediate = 0;
         if (pvkGetPhysicalDeviceSurfacePresentModesKHR(s_vk.phys, s_vk.surface, &nm, NULL) == VK_SUCCESS) {
             if (nm > 16) nm = 16;
             if (pvkGetPhysicalDeviceSurfacePresentModesKHR(s_vk.phys, s_vk.surface, &nm, modes) >= VK_SUCCESS)
-                for (u32 i = 0; i < nm; i++)
-                    if (modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) mode = VK_PRESENT_MODE_MAILBOX_KHR;
+                for (u32 i = 0; i < nm; i++) {
+                    if (modes[i] == VK_PRESENT_MODE_MAILBOX_KHR) mailbox = 1;
+                    if (modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR) immediate = 1;
+                }
         }
+        if (mailbox) mode = VK_PRESENT_MODE_MAILBOX_KHR;
+        else if (immediate) mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
     }
 
     static const VkCompositeAlphaFlagBitsKHR alphas[] = {
@@ -2118,7 +2143,8 @@ static int vk_create_swapchain(void)
     s_vk.sc_extent = ext;
     s_vk.sc_count = n;
     VK_LOG("window swapchain %ux%u, %u images, format %d, %s\n", ext.width, ext.height, n, (int)fmt.format,
-           mode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" : "fifo (vsync)");
+           mode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox" :
+           mode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate" : "fifo (vsync)");
     return 0;
 }
 
