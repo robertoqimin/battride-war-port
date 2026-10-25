@@ -16,7 +16,7 @@ This repository contains port code, configuration, tests, and instructions. **It
 
 - Audio no longer breaks up. The game's audio SPU task ran interpreted and filled only about a third of the cellAudio blocks in time (4 blocks of sound, 8 of silence, repeating). `scripts/lift_audio_spu.py` now translates the task's code below its data tail and, when the firmware is present, the `flashMP3.pic` codec it loads (README_FIRMWARE.md); `spu_bridge.c` runs that code and interprets the rest. Measured on the title music and 45 s of mission combat: no empty blocks while sound plays (`PORT_AUDIO_STATS=1` reports this), still at about 30 fps. The interpreter got a decode cache, and the SDK channel layer's per-access `getenv` was cached. Prolonged sessions and other stages have not been checked.
 
-**The experience is still not smooth:** there is intermittent excessive brightness and incorrect effects/colors. Defeating enemies, completing missions, the full game, and prolonged stability have not been validated.
+**The experience is still not smooth:** combat still drops frames in the most crowded fights, and a large untextured polygon was seen for one frame at the start of a special attack. The opening mission has been completed; the rest of the game and prolonged stability have not been validated. Shadows, lighting and effects in the opening mission match footage of the original game.
 
 The long gameplay session used a six-second PAMF replacement solely to speed up the introduction. Original assets were not modified; the normal launcher still uses the original video. The entire sequence with that video was not repeated during the latest gameplay validation.
 

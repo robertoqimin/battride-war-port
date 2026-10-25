@@ -10,8 +10,8 @@ Levantamento de tudo o que foi reportado até 23/10/2026, com a situação atual
 | 2 | FPS muito baixo e variável em combate | Desempenho | Parcial: ~30 fps no combate comum, cai para ~20 com muitos inimigos |
 | 3 | FPS cai ao andar e com multidões | Desempenho | Resolvido (~38 fps de média) |
 | 4 | Áudio com interrupções e estalos | Áudio | Parcial: ainda quebra em combate (teste manual) |
-| 5 | Brilho excessivo intermitente | Gráficos | Em aberto |
-| 6 | Cores e efeitos especiais incorretos | Gráficos | Em aberto |
+| 5 | Brilho excessivo intermitente | Gráficos | Não reproduzido (clarões conferidos com o original) |
+| 6 | Cores e efeitos especiais incorretos | Gráficos | Parcial: batem com o original; um artefato de 1 frame visto |
 | 17 | Sombras incorretas | Gráficos | Resolvido na primeira missão |
 | 7 | Conclusão de missões | Gameplay | Validado na primeira missão (teste manual) |
 | 8 | Jogo completo não validado | Gameplay | Em aberto |
@@ -60,11 +60,14 @@ Levantamento de tudo o que foi reportado até 23/10/2026, com a situação atual
 - **Ressalvas:** sessões longas e outras fases não foram verificadas.
 - **Teste manual (23/10/2026):** o áudio ainda quebra em combate. Como coincide com as quedas de FPS, a suspeita é disputa de CPU: a thread de áudio do SPU e a thread de render do jogo ficam ambas perto de 100%.
 
-### 5. Brilho excessivo intermitente — Em aberto
-Relatado no estado inicial do projeto e não investigado. Um frame posterizado em amarelo e vermelho foi visto na entrada da missão quando ainda havia redesenho repetido (item 1). Não foi confirmado se persiste depois das correções.
+### 5. Brilho excessivo intermitente — Não reproduzido
+- **Relato inicial:** um frame posterizado em amarelo e vermelho na entrada da missão, quando ainda havia redesenho repetido (item 1).
+- **Verificação (25/10/2026):** um frame por segundo durante boot, menus, cena de abertura e combate com golpes especiais, medindo brilho médio, pixels estourados e número de cores. Nenhum frame posterizado (todos os frames de combate têm 180-230 mil cores). Os únicos frames brancos são o fade para branco e o clarão da cena de abertura ("俺の名は『ウィザード』"), e uma gravação do jogo original (YouTube `u4YixUZPH30`, a partir de 3:05) tem a mesma sequência: fade para branco, cerca de 2 s de preto e novo clarão que se desfaz na cena do portão. Os clarões dos golpes especiais têm o tamanho dos do original.
+- **Conclusão:** não reproduzido nas versões atuais. O chão escurecido pelas sombras erradas (item 17) mudava bastante o brilho da cena e pode ter contribuído para o relato.
 
-### 6. Cores e efeitos especiais incorretos — Em aberto
-Relatado no estado inicial do projeto; não investigado. Provavelmente envolve o backend Vulkan (blend, formatos de superfície ou constantes de fragment program).
+### 6. Cores e efeitos especiais incorretos — Parcial
+- **Verificação (25/10/2026):** comparado com a mesma gravação do original: os efeitos dos golpes (círculos mágicos vermelhos, fogo, água do estilo Water, o braço-canhão) e a iluminação do combate batem. A cena do holofote só ficou igual depois das correções de sombra (item 17).
+- **Ainda visto:** num único frame, no início de um golpe especial, um polígono grande, bege e sem textura cortou a parte de baixo da tela na diagonal. Não se repetiu em outras capturas; a causa não foi encontrada.
 
 ### 17. Sombras incorretas — Resolvido na primeira missão
 - **Sintoma:** os personagens não projetavam sombra, e o chão dentro do alcance do *shadow map* ficava todo escurecido; fora dele (uma região retangular com borda reta) ficava claro.
