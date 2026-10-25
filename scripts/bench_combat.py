@@ -118,6 +118,8 @@ def run_once(binary, seconds, extra_env, work, stacks=0, pin=0, prefix=()):
     for tid, (name, ticks) in t1_cpu.items():
         before = t0_cpu[tid][1] if tid in t0_cpu else 0
         threads['%s/%d' % (names.get(tid, name), tid)] = 100.0 * (ticks - before) / CLK_TCK / wall
+    if samples:
+        (work / 'stacks.txt').write_text('\n\n'.join(samples))
     return window, threads, stack_summary(samples, names) if stacks else {}
 
 
@@ -210,6 +212,8 @@ def main():
                         if args.keep_logs and (Path(work) / 'run.log').exists():
                             args.keep_logs.mkdir(parents=True, exist_ok=True)
                             shutil.copy2(Path(work) / 'run.log', args.keep_logs / ('run%d.log' % (n + 1)))
+                            if (Path(work) / 'stacks.txt').exists():
+                                shutil.copy2(Path(work) / 'stacks.txt', args.keep_logs / ('stacks%d.txt' % (n + 1)))
                     break
                 except RuntimeError as e:
                     if attempt == 2 or 'combat not reached' not in str(e):
