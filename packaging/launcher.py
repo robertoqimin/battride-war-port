@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 
-from importer import DISPLAY_FILTERS, DISPLAY_MODES, ImportError, Package, Runner
+from importer import DISPLAY_FILTERS, DISPLAY_MODES, RENDER_SCALES, ImportError, Package, Runner
 
 ROOT = Path(os.environ.get('PORT_APPDIR', Path(__file__).resolve().parents[1]))
 
@@ -150,10 +150,19 @@ def main():
             for widget in (self.mode, self.size, self.filter):
                 row.pack_start(widget, False, False, 0)
             grid.attach(row, 1, 2, 1, 1)
+            grid.attach(Gtk.Label(label='Rendering', xalign=0), 0, 3, 1, 1)
+            self.scale = Gtk.ComboBoxText()
+            for scale, label in (('1', 'Native resolution (1280 × 720)'), ('2', '2× (2560 × 1440)'),
+                                 ('3', '3× (3840 × 2160)'), ('4', '4× (5120 × 2880)')):
+                self.scale.append(scale, label)
+            self.scale.set_active_id(str(display.get('scale')) if str(display.get('scale')) in RENDER_SCALES else '1')
+            scale_row = Gtk.Box(spacing=10)
+            scale_row.pack_start(self.scale, False, False, 0)
+            grid.attach(scale_row, 1, 3, 1, 1)
             hint = Gtk.Label(xalign=0)
-            hint.set_markup('<small>The game renders at 1280 × 720 and is scaled to the window keeping 16:9. '
-                            'Alt+Enter or F11 switches between window and fullscreen while playing.</small>')
-            grid.attach(hint, 1, 3, 1, 1)
+            hint.set_markup('<small>Higher internal resolutions render the game sharper and need a faster GPU. '
+                            'The picture keeps 16:9; Alt+Enter or F11 switches window and fullscreen while playing.</small>')
+            grid.attach(hint, 1, 4, 1, 1)
             self.hud = Gtk.CheckButton(label='Enable MangoHud (if installed on this PC)')
             box.pack_start(self.hud, False, False, 0)
             actions = Gtk.Box(spacing=10)
@@ -181,7 +190,7 @@ def main():
             def apply():
                 if self.closed:
                     return False
-                for widget in (self.iso, self.data, self.hud, self.start, self.mode, self.filter):widget.set_sensitive(enabled)
+                for widget in (self.iso, self.data, self.hud, self.start, self.mode, self.filter, self.scale):widget.set_sensitive(enabled)
                 self.size.set_sensitive(enabled and self.mode.get_active_id() != 'borderless')
                 self.stop.set_sensitive(not enabled)
                 if enabled:self.progress.set_fraction(0)
@@ -203,7 +212,7 @@ def main():
             self.runner = Runner()
             hud = self.hud.get_active()
             display = {'mode': self.mode.get_active_id(), 'size': self.size.get_active_id(),
-                       'filter': self.filter.get_active_id()}
+                       'filter': self.filter.get_active_id(), 'scale': self.scale.get_active_id()}
             self.log_dir = dest / 'logs' / (time.strftime('%Y%m%d-%H%M%S') + '-' + str(os.getpid()))
             self.log_dir.mkdir(parents=True, exist_ok=False)
             config_path.parent.mkdir(parents=True, exist_ok=True)

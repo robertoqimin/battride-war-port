@@ -83,13 +83,15 @@ def place_profiles(source, dest, sdk):
 
 
 # Display settings the launcher offers, passed to the game's window
-# (vulkan_bridge.c: PORT_DISPLAY_MODE, PORT_DISPLAY_SIZE, PORT_DISPLAY_FILTER).
+# (vulkan_bridge.c: PORT_DISPLAY_MODE, PORT_DISPLAY_SIZE, PORT_DISPLAY_FILTER,
+# and PORT_RENDER_SCALE for the internal resolution).
 DISPLAY_MODES = ('windowed', 'borderless', 'fullscreen')
 DISPLAY_FILTERS = ('fsr', 'linear')
+RENDER_SCALES = ('1', '2', '3', '4')
 
 
 def display_env(display):
-    """Environment for a {'mode', 'size', 'filter'} choice; unknown values are dropped."""
+    """Environment for a {'mode', 'size', 'filter', 'scale'} choice; unknown values are dropped."""
     env = {}
     if display.get('mode') in DISPLAY_MODES:
         env['PORT_DISPLAY_MODE'] = display['mode']
@@ -98,6 +100,8 @@ def display_env(display):
         env['PORT_DISPLAY_SIZE'] = size
     if display.get('filter') in DISPLAY_FILTERS:
         env['PORT_DISPLAY_FILTER'] = display['filter']
+    if str(display.get('scale', '')) in RENDER_SCALES:
+        env['PORT_RENDER_SCALE'] = str(display['scale'])
     return env
 
 

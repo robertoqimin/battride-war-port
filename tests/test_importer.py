@@ -101,7 +101,8 @@ class ImporterTests(unittest.TestCase):
     def test_display_env_accepts_only_known_values(self):
         self.assertEqual(m.display_env({'mode':'fullscreen','size':'2560x1440','filter':'linear'}),
             {'PORT_DISPLAY_MODE':'fullscreen','PORT_DISPLAY_SIZE':'2560x1440','PORT_DISPLAY_FILTER':'linear'})
-        self.assertEqual(m.display_env({'mode':'evil; rm','size':'1920x1080 && x','filter':'?'}),{})
+        self.assertEqual(m.display_env({'mode':'evil; rm','size':'1920x1080 && x','filter':'?','scale':'8'}),{})
+        self.assertEqual(m.display_env({'scale':'2'}),{'PORT_RENDER_SCALE':'2'})
         self.assertEqual(m.display_env({}),{})
     def test_build_jobs_positive(self):
         self.assertGreaterEqual(m.build_jobs(),1)

@@ -17,7 +17,7 @@ What works in the tested parts:
 - **Saves and data:** game data installation and saves; 21,107 installed files matched the disc byte for byte.
 - **Movies:** PAMF playback through `cellSail`.
 - **Input:** keyboard and controllers through SDL2.
-- **Display:** windowed, borderless fullscreen or exclusive fullscreen at a chosen resolution, with the frame upscaled by AMD FSR 1 and kept at 16:9 (see [Display options](#display-options)).
+- **Display:** windowed, borderless fullscreen or exclusive fullscreen at a chosen resolution, internal rendering at up to 4× the PS3's resolution, AMD FSR 1 upscaling, and 16:9 kept with black bars (see [Display options](#display-options)).
 
 Known issues ([docs/ISSUES.md](docs/ISSUES.md) has the full list, in Portuguese):
 
@@ -99,9 +99,10 @@ The launcher's **Display** row sets how the game is shown; Alt+Enter or F11 swit
 - **Windowed:** a resizable window, starting at the chosen size.
 - **Borderless fullscreen:** a window covering the desktop at its own resolution.
 - **Fullscreen:** exclusive fullscreen, switching the monitor to the chosen resolution (the closest it offers).
-- **Upscaling:** the game renders its frames at 1280 × 720, as on the PS3. Shown larger, they are upscaled with **AMD FidelityFX Super Resolution 1.0** (edge-adaptive upscaling and sharpening) or plain bilinear filtering. The picture always keeps 16:9, with black bars on other aspect ratios.
+- **Rendering (internal resolution):** the PS3 renders the game at 1280 × 720. The port can render it 2×, 3× or 4× larger in each direction (2560 × 1440, 3840 × 2160, 5120 × 2880): every render target, shadow map included, is that much bigger, so geometry, shadows and effects are drawn at the higher resolution instead of being stretched. Measured in STG02 combat on a GTX 1650: about 45 fps at native resolution, 42 at 2×, 31 at 3× and 21 at 4×; above 2× that GPU becomes the limit.
+- **Upscaling:** when the rendered frame is shown larger than it was rendered, it is upscaled with **AMD FidelityFX Super Resolution 1.0** (edge-adaptive upscaling and sharpening) or plain bilinear filtering; shown smaller (for example 2× on a 1080p screen), it is filtered down. The picture always keeps 16:9, with black bars on other aspect ratios.
 
-Outside the launcher, the same settings are environment variables of the game: `PORT_DISPLAY_MODE` (`windowed`, `borderless`, `fullscreen`), `PORT_DISPLAY_SIZE` (for example `2560x1440`), `PORT_DISPLAY_FILTER` (`fsr`, `linear`), `PORT_DISPLAY_STRETCH=1` to fill the window, and `PORT_FSR_SHARPNESS` (sharpening in stops, default 0.2; 0 is the strongest). Rendering above 1280 × 720 (internal resolution scaling) is not supported yet.
+Outside the launcher, the same settings are environment variables of the game: `PORT_DISPLAY_MODE` (`windowed`, `borderless`, `fullscreen`), `PORT_DISPLAY_SIZE` (for example `2560x1440`), `PORT_RENDER_SCALE` (`1` to `4`), `PORT_DISPLAY_FILTER` (`fsr`, `linear`), `PORT_DISPLAY_STRETCH=1` to fill the window, and `PORT_FSR_SHARPNESS` (sharpening in stops, default 0.2; 0 is the strongest). `PORT_WINDOW_DUMP=<file>` writes one frame as the window receives it, for checking without a screenshot tool.
 
 ## Building from source
 
@@ -125,6 +126,7 @@ Generation refuses to overwrite existing results. Expect about 593 MiB of PPU so
 - `main.cpp`: the runner, including the huge-page remapping of the translated code (`PORT_HUGEPAGES=0` disables it) and the PGO training hooks.
 - `sync_bridge.c`: the SDK's Win32 compatibility layer with clock-free zero-timeout waits, used by every guest mutex lock.
 - `gcm_bridge.c`, `rsx_engine_bridge.c`, `vulkan_bridge.c`, `loader_bridge.cpp`: local adaptations of SDK implementations (the official checkout remains separate), including the RSX depth-comparison direction and texture border colours that the shadows need (`PORT_SHADOW_REVERSE=0` restores the SDK behaviour).
+- `vulkan_bridge.c` also holds the display modes and the internal resolution scale, which it applies at the backend's edges (target sizes, viewport and scissor, the fragment programs' screen position, and pixels crossing to or from guest memory) while the engine keeps the PS3's sizes.
 - `fsr1_bridge.c`, `shaders/fsr1.comp`, `fsr1_spv.h`: AMD FSR 1 upscaling for the window, with AMD's headers in `third_party/fsr1/` (`scripts/build_fsr1_shaders.py` regenerates the SPIR-V).
 - `rsx_vertex_bridge.c`: exact SIMD paths for common four-component vertex formats.
 - `include/port_ppu_memory.h`: guarded inline memory access in selected hot PPU chunks; reserved SPU lines and diagnostics retain the original accessors.
