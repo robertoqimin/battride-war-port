@@ -12,7 +12,7 @@ Levantamento de tudo o que foi reportado até 23/10/2026, com a situação atual
 | 4 | Áudio com interrupções e estalos | Áudio | Parcial: ainda quebra em combate (teste manual) |
 | 5 | Brilho excessivo intermitente | Gráficos | Em aberto |
 | 6 | Cores e efeitos especiais incorretos | Gráficos | Em aberto |
-| 17 | Sombras incorretas | Gráficos | Em aberto |
+| 17 | Sombras incorretas | Gráficos | Resolvido na primeira missão |
 | 7 | Conclusão de missões | Gameplay | Validado na primeira missão (teste manual) |
 | 8 | Jogo completo não validado | Gameplay | Em aberto |
 | 9 | Estabilidade prolongada | Estabilidade | Parcial (~30 min sem falhas) |
@@ -66,11 +66,11 @@ Relatado no estado inicial do projeto e não investigado. Um frame posterizado e
 ### 6. Cores e efeitos especiais incorretos — Em aberto
 Relatado no estado inicial do projeto; não investigado. Provavelmente envolve o backend Vulkan (blend, formatos de superfície ou constantes de fragment program).
 
-### 17. Sombras incorretas — Em aberto
-Relatado nos testes manuais, inclusive na sessão em que a primeira missão foi concluída: as sombras continuam erradas. Ainda não investigado. Suspeitas iniciais no backend Vulkan:
-- o caminho das *depth snapshots* (profundidade lida como textura, usada em shadow maps);
-- a comparação de profundidade ao amostrar;
-- o formato e a faixa de profundidade.
+### 17. Sombras incorretas — Resolvido na primeira missão
+- **Sintoma:** os personagens não projetavam sombra, e o chão dentro do alcance do *shadow map* ficava todo escurecido; fora dele (uma região retangular com borda reta) ficava claro.
+- **Causa:** o jogo desenha as silhuetas dos personagens num *shadow map* Z24S8 de 1024×1024 e o amostra na cena (unidade t3, formato DEPTH24_D8, `zfunc` LESS, filtro linear). No RSX a comparação de profundidade da textura é `profundidade armazenada OP referência`; o auxiliar do SDK fazia `referência OP profundidade armazenada`. Com a direção trocada, o resultado ficava invertido em todo pixel, e as contas do shader do jogo marcavam o chão inteiro como sombreado.
+- **Correção:** `rsx_engine_bridge.c` inverte a direção do `zfunc` (LESS↔GREATER, LEQUAL↔GEQUAL) antes de traduzir o shader. `PORT_SHADOW_REVERSE=0` volta ao comportamento anterior para comparação.
+- **Verificado:** na STG02, o chão aberto fica iluminado e cada personagem projeta a própria silhueta a partir dos pés; a área sob a estrutura dos silos continua sombreada (sombra do cenário). Desempenho igual. Outras missões e uma comparação lado a lado com o RPCS3 não foram feitas.
 
 ### 7. Conclusão de missões — Validado na primeira missão
 - **Teste manual (23/10/2026):** a primeira missão (STG02) foi concluída jogando manualmente, e ao terminar o jogo foi para a seleção de missões normalmente. As demais missões não foram testadas.

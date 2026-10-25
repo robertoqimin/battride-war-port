@@ -1414,6 +1414,20 @@ static u32 eng_volume_mask(void)
     return mask;
 }
 
+/* RSX depth-texture comparison tests the stored depth against the reference
+ * (texel OP reference); the SDK's shadow helper evaluates reference OP texel.
+ * This title's ground shader samples its character shadow map with zfunc
+ * LESS and builds the shadow from the result: with the SDK's direction the
+ * whole ground read as shadowed and no character cast a shadow. Swapping the
+ * direction here gives the lit ground and the characters' shadows.
+ * PORT_SHADOW_REVERSE=0 restores the SDK's direction for comparison. */
+static int eng_shadow_reverse(void)
+{
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("PORT_SHADOW_REVERSE"); on = !(e && *e == '0'); }
+    return on;
+}
+
 static u32 eng_cube_mask(void)
 {
     u32 mask = 0;
@@ -1653,6 +1667,11 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
         rsx_fp_shadow_desc_from_texture(&shadow[u], t.format, t.dimension,
             t.cubemap, t.mipmaps, t.filter, t.wrap, t.control0);
         if (shadow[u].enabled) shadow_mask |= 1u << u;
+        if (shadow[u].enabled && eng_shadow_reverse()) {
+            /* LESS<->GREATER, LEQUAL<->GEQUAL; NEVER/EQUAL/NOTEQUAL/ALWAYS keep. */
+            static const u8 reversed[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
+            shadow[u].func = reversed[shadow[u].func & 7u];
+        }
     }
     u8 gamma_masks[RSX_DSP_NUM_TEXTURES] = {0};
     if (!fixed) for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u) {
