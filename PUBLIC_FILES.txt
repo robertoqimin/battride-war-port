@@ -20,6 +20,7 @@ fsr1_spv.h
 gcm_bridge.c
 include/port_ppu_memory.h
 include/ppu_vmx.h
+input_bridge.c
 loader_bridge.cpp
 main.cpp
 recompile.json

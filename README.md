@@ -16,7 +16,7 @@ What works in the tested parts:
 - **Audio:** music, voices and effects, with the game's audio SPU task and its MP3 codec translated to native code.
 - **Saves and data:** game data installation and saves; 21,107 installed files matched the disc byte for byte.
 - **Movies:** PAMF playback through `cellSail`.
-- **Input:** keyboard and controllers through SDL2.
+- **Input:** controllers through SDL2, and keyboard and mouse (see [Controls](#controls)); both can be used together.
 - **Display:** windowed, borderless fullscreen or exclusive fullscreen at a chosen resolution, internal rendering at up to 4× the PS3's resolution, AMD FSR 1 upscaling, and 16:9 kept with black bars (see [Display options](#display-options)).
 
 Known issues ([docs/ISSUES.md](docs/ISSUES.md) has the full list, in Portuguese):
@@ -92,9 +92,31 @@ On hosts whose libstdc++ is older than RPCS3 needs (below `GLIBCXX_3.4.32`, e.g.
 
 **For more frames:** set the CPU governor to performance (`powerprofilesctl set performance`), run through `gamemoderun` if GameMode is installed, and keep laptops plugged in.
 
+## Controls
+
+A controller (anything SDL2 recognises: DualShock, DualSense, Xbox, Switch Pro...) works as the PS3 pad. Keyboard and mouse work at the same time, as pad 1:
+
+| Keyboard / mouse | PS3 pad |
+|---|---|
+| W A S D | left stick (move) |
+| mouse | right stick (camera) |
+| left button, J | □ (normal attack) |
+| right button, I | △ |
+| middle button, L | ○ |
+| Space, K | × (jump) |
+| Q / E | L1 / R1 |
+| Left Shift / R | L2 / R2 |
+| V / C | L3 / R3 |
+| arrow keys | d-pad |
+| Enter / Backspace | ○ / × (confirm / back in menus, as on a Japanese PS3) |
+| Esc | START (pause) |
+| Tab | SELECT |
+
+Click in the window to let the mouse move the camera (in fullscreen it is captured automatically); Alt or switching away releases it. `PORT_MOUSE_SENSITIVITY` scales the camera (default 1.0). Close the game with the window's close button.
+
 ## Display options
 
-The launcher's **Display** row sets how the game is shown; Alt+Enter or F11 switches between the window and fullscreen while playing, and Esc closes the game.
+The launcher's **Display** row sets how the game is shown; Alt+Enter or F11 switches between the window and fullscreen while playing.
 
 - **Windowed:** a resizable window, starting at the chosen size.
 - **Borderless fullscreen:** a window covering the desktop at its own resolution.
@@ -124,6 +146,7 @@ Generation refuses to overwrite existing results. Expect about 593 MiB of PPU so
 
 - `stubs.cpp`: game HLE adapters, blocking `sys_lwcond`, the optional graphics buffer expansion, and the CPU sampler (`PORT_PROFILE`).
 - `main.cpp`: the runner, including the huge-page remapping of the translated code (`PORT_HUGEPAGES=0` disables it) and the PGO training hooks.
+- `input_bridge.c`: the SDK's cellPad with keyboard and mouse merged into pad port 0 (`vulkan_bridge.c` captures the mouse).
 - `sync_bridge.c`: the SDK's Win32 compatibility layer with clock-free zero-timeout waits, used by every guest mutex lock.
 - `gcm_bridge.c`, `rsx_engine_bridge.c`, `vulkan_bridge.c`, `loader_bridge.cpp`: local adaptations of SDK implementations (the official checkout remains separate), including the RSX depth-comparison direction and texture border colours that the shadows need (`PORT_SHADOW_REVERSE=0` restores the SDK behaviour).
 - `vulkan_bridge.c` also holds the display modes and the internal resolution scale, which it applies at the backend's edges (target sizes, viewport and scissor, the fragment programs' screen position, and pixels crossing to or from guest memory) while the engine keeps the PS3's sizes.

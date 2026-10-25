@@ -1912,6 +1912,8 @@ static Uint32 vk_display_flags(int mode)
          : mode == VK_DISPLAY_BORDERLESS ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0;
 }
 
+static void vk_mouse_capture(int on);   /* with the event pump, below */
+
 /* Enter a display mode on the open window. Returns 0 on success. */
 static int vk_display_apply(int mode)
 {
@@ -1931,6 +1933,7 @@ static int vk_display_apply(int mode)
     if (mode == VK_DISPLAY_WINDOWED) SDL_SetWindowSize(s_vk.window, s_vk.win_w, s_vk.win_h);
     SDL_ShowCursor(mode == VK_DISPLAY_WINDOWED ? SDL_ENABLE : SDL_DISABLE);
     s_vk.display_mode = mode;
+    vk_mouse_capture(mode != VK_DISPLAY_WINDOWED);
     __atomic_store_n(&s_vk.sc_dirty, 1, __ATOMIC_RELEASE);
     const char* names[] = { "windowed", "borderless fullscreen", "exclusive fullscreen" };
     VK_LOG("display: %s\n", names[mode]);
@@ -4686,6 +4689,21 @@ void rsx_vulkan_backend_shutdown(void)
     memset(&s_vk, 0, sizeof s_vk);
 }
 
+/* Keyboard and mouse as pad port 0 (input_bridge.c). The mouse drives the
+ * camera while captured in relative mode: a click in the window or entering
+ * fullscreen captures it, Alt or losing focus releases it. */
+extern int port_mouse_captured, port_mouse_buttons;
+void port_input_mouse_motion(int dx, int dy);
+int port_input_keyboard_enabled(void);
+
+static void vk_mouse_capture(int on)
+{
+    if (!s_vk.window || !port_input_keyboard_enabled() || on == port_mouse_captured) return;
+    if (SDL_SetRelativeMouseMode(on ? SDL_TRUE : SDL_FALSE) != 0) return;
+    __atomic_store_n(&port_mouse_buttons, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&port_mouse_captured, on, __ATOMIC_RELEASE);
+}
+
 int rsx_vulkan_backend_pump_messages(void)
 {
     if (!s_vk.windowed) return 0;
@@ -4693,7 +4711,23 @@ int rsx_vulkan_backend_pump_messages(void)
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) quit = 1;
-        else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) quit = 1;
+        /* Esc is the pad's START with the keyboard on; it quits only without. */
+        else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE && !port_input_keyboard_enabled()) quit = 1;
+        else if (e.type == SDL_KEYDOWN && (e.key.keysym.sym == SDLK_LALT || e.key.keysym.sym == SDLK_RALT))
+            vk_mouse_capture(0);
+        else if (e.type == SDL_MOUSEBUTTONDOWN && !port_mouse_captured)
+            vk_mouse_capture(1);                 /* the capturing click is not a press */
+        else if (e.type == SDL_MOUSEBUTTONDOWN)
+            __atomic_or_fetch(&port_mouse_buttons, (int)SDL_BUTTON(e.button.button), __ATOMIC_RELAXED);
+        else if (e.type == SDL_MOUSEBUTTONUP)
+            __atomic_and_fetch(&port_mouse_buttons, ~(int)SDL_BUTTON(e.button.button), __ATOMIC_RELAXED);
+        else if (e.type == SDL_MOUSEMOTION && port_mouse_captured)
+            port_input_mouse_motion(e.motion.xrel, e.motion.yrel);
+        else if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
+            vk_mouse_capture(0);
+        else if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED &&
+                 s_vk.display_mode != VK_DISPLAY_WINDOWED)
+            vk_mouse_capture(1);
         else if (e.type == SDL_KEYDOWN && !e.key.repeat && s_vk.window &&
                  (e.key.keysym.sym == SDLK_F11 ||
                   (e.key.keysym.sym == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT))))

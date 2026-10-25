@@ -112,6 +112,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/audio_bridge.c" TARGET_DIRECTORY ps3recomp_runtime PROPERTIES COMPILE_DEFINITIONS "PORT_AUDIO_SOURCE=\"${PS3RECOMP_DIR}/libs/audio/cellAudio.c\"")
 endif()
 
+# Keyboard and mouse as pad port 0, around the SDK's controller poll.
+get_target_property(PORT_PAD_SOURCES ps3recomp_runtime SOURCES)
+list(FILTER PORT_PAD_SOURCES EXCLUDE REGEX "libs/input/cellPad\\.c$")
+set_property(TARGET ps3recomp_runtime PROPERTY SOURCES "${PORT_PAD_SOURCES}")
+target_sources(ps3recomp_runtime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/input_bridge.c")
+set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/input_bridge.c" TARGET_DIRECTORY ps3recomp_runtime
+    PROPERTIES COMPILE_DEFINITIONS "PORT_CELLPAD_SOURCE=\"${PS3RECOMP_DIR}/libs/input/cellPad.c\"")
+
 # Guest lwmutex locks wait on Win32-style semaphores; skip the clock reads a
 # zero-timeout wait on them does not need (sync_bridge.c).
 if(NOT WIN32)

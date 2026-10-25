@@ -163,6 +163,11 @@ def main():
             hint.set_markup('<small>Higher internal resolutions render the game sharper and need a faster GPU. '
                             'The picture keeps 16:9; Alt+Enter or F11 switches window and fullscreen while playing.</small>')
             grid.attach(hint, 1, 4, 1, 1)
+            keys = Gtk.Label(xalign=0)
+            keys.set_markup('<small>Controller, or keyboard and mouse: WASD move, mouse camera (click the window; Alt releases), '
+                            'left/right/middle click □/△/○, Space ×, Q/E L1/R1, Shift/R L2/R2, Enter confirm, Esc pause.</small>')
+            keys.set_line_wrap(True)
+            box.pack_start(keys, False, False, 0)
             self.hud = Gtk.CheckButton(label='Enable MangoHud (if installed on this PC)')
             box.pack_start(self.hud, False, False, 0)
             actions = Gtk.Box(spacing=10)

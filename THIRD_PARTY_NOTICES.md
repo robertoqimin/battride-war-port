@@ -18,7 +18,7 @@ The project started from the PS3Recomp template. `CMakeLists.txt`, `config.toml`
 | `vulkan_bridge.c` | `libs/video/rsx_vulkan_backend.c` |
 | `spu_interp_bridge.c` | `runtime/spu/spu_interp.c` |
 
-`audio_bridge.c`, `fs_bridge.cpp` and `spu_channels_bridge.c` include SDK implementations at build time. The FIFO fixtures in `tests/test_gcm_jump.c` also derive from SDK tests. The official checkout remains separate, with its original licenses and notices.
+`audio_bridge.c`, `fs_bridge.cpp`, `input_bridge.c` (`libs/input/cellPad.c`), `spu_channels_bridge.c` and `sync_bridge.c` (`runtime/platform/win32_compat.c`) include SDK implementations at build time. The FIFO fixtures in `tests/test_gcm_jump.c` also derive from SDK tests. The official checkout remains separate, with its original licenses and notices.
 
 ## AMD FidelityFX Super Resolution 1.0
 
