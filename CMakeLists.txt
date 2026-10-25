@@ -347,6 +347,7 @@ if(NOT PORT_PGO STREQUAL "off")
             "$<$<COMPILE_LANGUAGE:CXX>:-fprofile-generate=${PORT_PGO_DIR}>"
             "$<$<COMPILE_LANGUAGE:CXX>:-fprofile-update=atomic>")
         target_link_options(${PROJECT_NAME} PRIVATE "-fprofile-generate=${PORT_PGO_DIR}")
+        target_compile_definitions(${PROJECT_NAME} PRIVATE PORT_PGO_GENERATE=1)
     else()
         file(GLOB_RECURSE PORT_PGO_DATA "${PORT_PGO_DIR}/*.gcda")
         if(NOT PORT_PGO_DATA)
@@ -354,7 +355,8 @@ if(NOT PORT_PGO STREQUAL "off")
         endif()
         target_compile_options(${PROJECT_NAME} PRIVATE
             "$<$<COMPILE_LANGUAGE:CXX>:-fprofile-use=${PORT_PGO_DIR}>"
-            "$<$<COMPILE_LANGUAGE:CXX>:-fprofile-correction>")
+            "$<$<COMPILE_LANGUAGE:CXX>:-fprofile-correction>"
+            "$<$<COMPILE_LANGUAGE:CXX>:-Wno-error=coverage-mismatch>")
     endif()
 endif()
 

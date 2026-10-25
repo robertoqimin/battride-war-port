@@ -167,11 +167,22 @@ cmake --build --preset linux-vulkan
 # Repeat the same benchmark and compare with the ordinary build.
 ```
 
-Do not use a forced kill as a training shutdown: GCC normally writes profiles on
-normal process exit. This port does not yet have a validated clean exit on every
-path, so PGO is experimental and is not enabled in the validated default build.
+Do not use a forced kill as a training shutdown. GCC writes profiles at a normal
+exit, which the runner does not reliably reach, so a training build writes them
+on SIGTERM or SIGINT (`kill <pid>` or Ctrl+C) and exits. PGO is experimental and
+is not enabled in the validated default build.
 Configuration rejects use mode if no .gcda files exist. Investigate missing-profile
 or mismatched-profile compiler diagnostics before claiming a trained build.
+Measured on a Ryzen 5 4600H with GCC 16, trained on two runs of the STG02
+benchmark below (boot, menus and 60 s of combat, each ending with SIGTERM; the
+instrumented build runs at about 7 fps): over four alternating 60-second combat
+runs against the same source without PGO, 51.3 against 47.2 fps, p95 22.9
+against 28.0 ms, frames over 33 ms 4 against 24, worst five seconds 47.0
+against 35.2 fps. In a different scripted fight (walking into new groups),
+frames with 550-800 draws ran at 50.6 against 36.5 fps. The profiles come from
+running the title's translated code: keep them private like the generated
+sources, and note that `.gcda` files only match the GCC version that made them.
+
 `PORT_PGO_DIR` chooses the private profile directory (default: build directory/pgo).
 Restore the normal build with `-DPORT_PGO=off`. Native CPU builds may not run on
 older CPUs; choose `PORT_MARCH` for the intended target when distributing binaries.

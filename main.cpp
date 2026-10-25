@@ -407,6 +407,31 @@ static void remap_text_huge(void)
 }
 #endif
 
+#ifdef PORT_PGO_GENERATE
+/* Training builds (PORT_PGO=generate): GCC writes its profiles at a normal
+ * exit, which the runner does not reliably reach, so SIGTERM and SIGINT write
+ * them and end the process. Not in ordinary builds. */
+#include <csignal>
+#include <unistd.h>
+extern "C" void __gcov_dump(void);
+static void pgo_dump_and_exit(int)
+{
+    __gcov_dump();
+    _exit(0);
+}
+#endif
+/* Out of line, so main's control flow is the same in training and use builds. */
+#ifdef __GNUC__
+__attribute__((noinline))
+#endif
+static void pgo_training_hooks(void)
+{
+#ifdef PORT_PGO_GENERATE
+    signal(SIGTERM, pgo_dump_and_exit);
+    signal(SIGINT, pgo_dump_and_exit);
+#endif
+}
+
 static bool alloc_guest_vm(void)
 {
 #ifdef _WIN32
@@ -459,6 +484,7 @@ int main(int argc, char** argv)
 #endif
 
     printf("=== ps3recomp game runner ===\n");
+    pgo_training_hooks();
 #if defined(__linux__) && defined(MADV_HUGEPAGE) && defined(MREMAP_FIXED)
     remap_text_huge();
 #endif
