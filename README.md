@@ -28,15 +28,14 @@ Known issues ([docs/ISSUES.md](docs/ISSUES.md) has the full list, in Portuguese)
 
 ### Performance
 
-Measured on a Ryzen 5 4600H with a GTX 1650, in 60-second windows of STG02 combat (four alternating runs per build):
+Measured on a Ryzen 5 4600H with a GTX 1650 with `scripts/bench_combat.py`: 60-second windows of STG02 fighting (the first fight, after the tutorial prompt), with the game built on this computer by the AppImage:
 
-| Build | Average | Frames over 33 ms | Worst 5 seconds |
+| Build | Average | p95 frame | Worst 5 seconds |
 |---|---|---|---|
-| AppImage v0.4.x (bundled GCC 11, optimization profiles) | 47.9 fps | 3 | 42.9 fps |
-| Same code without the profiles | 46.4 fps | 17 | 35.4 fps |
-| Development build (GCC 16, optimization profiles) | 51.3 fps | 4 | 47.0 fps |
+| AppImage v0.5.0 (bundled GCC 11, optimization profiles) | 55.6 fps (runs of 57.0, 51.9 and 57.9) | 21.2 ms | 46.1 fps |
+| v0.4.x code on the same route | about 48 fps | 24 ms | about 45 fps |
 
-These are guest frames per second: the game runs its logic in real time and renders as fast as the host allows. Bigger crowds than in these scripted fights lower the rate; a manual session before v0.4.0 reported about 25 fps on this laptop in the heaviest fights, and the same session ran at about 40 fps on a Ryzen 7 5700X with an RX 6750 XT. Those manual figures have not been re-measured since.
+These are guest frames per second: the game runs its logic in real time and caps itself at 60. The run at 51.9 fps met a heavier fight (up to 960 draws a frame against about 800). In the heaviest moments the game's own command building on its main thread is the limit ([docs/PERFORMANCE.md](docs/PERFORMANCE.md)); a manual session before v0.4.0 reported about 25 fps on this laptop in the heaviest fights, not re-measured since.
 
 What got it there, from about 6 fps at the start (details in [docs/PERFORMANCE.md](docs/PERFORMANCE.md)):
 
@@ -47,6 +46,7 @@ What got it there, from about 6 fps at the start (details in [docs/PERFORMANCE.m
 - Guest mutex locks no longer read the system clock twice per call, which cut frames over 33 ms by about two thirds.
 - The translated code runs from transparent huge pages where the kernel allows them.
 - GCC profile-guided optimization, trained on the opening mission and shipped with the AppImage.
+- In 0.5.0: the busiest threads on physical cores of their own, render targets kept instead of recreated every frame, faster vertex and index processing on the RSX walker, and the guarded fast store for every translated store.
 
 ## System requirements (AppImage)
 
