@@ -7,11 +7,11 @@ The AppImage contains **no game code or assets**. It includes GCC optimization p
 Make the AppImage executable and open it:
 
 ```sh
-chmod +x BattrideWarPort-v0.4.1-x86_64.AppImage
-./BattrideWarPort-v0.4.1-x86_64.AppImage
+chmod +x BattrideWarPort-v0.5.0-x86_64.AppImage
+./BattrideWarPort-v0.5.0-x86_64.AppImage
 ```
 
-If FUSE is unavailable, run `./BattrideWarPort-v0.4.1-x86_64.AppImage --appimage-extract-and-run`.
+If FUSE is unavailable, run `./BattrideWarPort-v0.5.0-x86_64.AppImage --appimage-extract-and-run`.
 
 Select the Japan BLJS10220 ISO and click **Import ISO & Play**. The first launch:
 
@@ -29,8 +29,8 @@ On laptops with two GPUs the game picks the discrete one. If it picks the wrong 
 Headless checks:
 
 ```sh
-./BattrideWarPort-v0.4.1-x86_64.AppImage --check    # helpers and build tools start
-./BattrideWarPort-v0.4.1-x86_64.AppImage --import-only /path/game.iso --data-dir /new/empty/data   # import and build
+./BattrideWarPort-v0.5.0-x86_64.AppImage --check    # helpers and build tools start
+./BattrideWarPort-v0.5.0-x86_64.AppImage --import-only /path/game.iso --data-dir /new/empty/data   # import and build
 ```
 
 ## Build the AppImage
@@ -44,12 +44,12 @@ podman run --rm --userns=keep-id --security-opt label=disable \
   -v "$G:$G" -v /path/inputs:/path/inputs:ro -w "$PWD" battride-build:ubuntu22.04 \
   python3 scripts/build_appimage.py \
     --runtime /path/inputs/runtime-x86_64 \
-    --sevenzip-dir /path/inputs/7zip-linux --stage build-appimage/v0.4.1/AppDir \
-    --pgo build-pgo11/pgo --output dist/BattrideWarPort-v0.4.1-x86_64.AppImage
+    --sevenzip-dir /path/inputs/7zip-linux --stage build-appimage/v0.5.0/AppDir \
+    --pgo build-pgo11/pgo --output dist/BattrideWarPort-v0.5.0-x86_64.AppImage
 # Corresponding source for the release page (runs as container root; needs network):
 podman run --rm --security-opt label=disable -v "$G:$G" -w "$PWD" battride-build:ubuntu22.04 \
-  python3 scripts/collect_sources.py --stage build-appimage/v0.4.1/AppDir \
-    --out dist/BattrideWarPort-v0.4.1-sources.tar --runtime-commit <type2-runtime commit>
+  python3 scripts/collect_sources.py --stage build-appimage/v0.5.0/AppDir \
+    --out dist/BattrideWarPort-v0.5.0-sources.tar --runtime-commit <type2-runtime commit>
 ```
 
 `--pgo` takes GCC profiles trained with the AppImage's own compiler (see "Optimization profiles"); without it the AppImage builds the game without them.
@@ -76,6 +76,16 @@ The runner is linked with `PORT_PORTABLE=ON`, which hides the static shader-tool
 Nothing in the AppImage uses `LD_LIBRARY_PATH`. It would leak the bundled libraries into host programs started from it: ninja runs every command through `/bin/sh`, which on Arch-based systems is bash linked against the host's newer readline, and the bundled Ubuntu readline broke it. Instead, `patchelf` gives each bundled executable a relative DT_RPATH (inherited by the libraries it loads), the toolchain's tools point at `usr/toolchain/runtime/`, and libraries with their own RUNPATH (LLVM, libpulse) are rewritten the same way.
 
 The builder refuses existing stage/output paths. It never bundles libc, the dynamic loader, the C++ runtime, the GL/Vulkan loaders, DRM/GBM/LLVM, or the core X11/xcb/Wayland libraries that Mesa and NVIDIA link; those come from the host so they match its GPU driver. Toolkit helpers that are not on every host (GTK 4 and libadwaita, the librsvg icon loader, SDL2, xcb-util, xkbcommon) are bundled. RPCS3 runs through its own `AppRun`, which uses RPCS3's `checkrt` C++ runtime on hosts older than it needs. Unresolved imports seen at build time are listed in `app/unresolved-build-libraries.txt` (none are expected). Dependency paths are recorded in `app/library-sources.json`; component hashes are in `app/package.json`. Build-image package documentation (including the toolchain's licenses) is retained, and `app/CREDITS.md` is shown by the launcher's **Credits & licenses** button.
+
+## What changed in 0.5.0
+
+- **Launcher** rebuilt on GTK 4 and libadwaita 1.1 (the Ubuntu 22.04 floor), with Game, Settings, Keyboard, Controller and Log pages; the Log page follows the import, build and game logs live. A GameMode switch appears when `gamemoderun` is installed.
+- **Display:** windowed, borderless and fullscreen modes at a chosen size, AMD FSR 1 upscaling, 16:9 kept with black bars, and internal rendering at 2x, 3x or 4x.
+- **Controls:** keyboard and mouse as pad 1 with remapping and mouse camera sensitivity; controllers get a radial stick dead zone, button remapping, the first one connected as player 1, a bundled SDL_GameControllerDB and connection messages in the log.
+- **Window:** Wayland when the session has it, and IMMEDIATE presentation when MAILBOX is missing, so the window no longer waits for vsync through XWayland.
+- **Performance:** average fps in STG02 fighting went from about 48 to about 58 on the test laptop (Ryzen 5 4600H, GTX 1650): busy threads on cores of their own, render targets no longer recreated every frame, faster vertex and index processing on the RSX walker, and the guarded fast store for every translated store ([PERFORMANCE.md](PERFORMANCE.md)).
+- **Shadows** sit at the characters' feet again: the shadow map was sampled from an attachment wider than the map.
+- The game is rebuilt once on first launch.
 
 ## No translated code in the sources in 0.4.1
 
