@@ -4,7 +4,7 @@ An **experimental** native Linux port of Kamen Rider: Battride War (Japan), **BL
 
 This repository contains the port's code, configuration, tests and instructions. **It does not include the game, ISO, EBOOT, firmware, keys, saves, a compiled game executable, or generated PPU/SPU sources.** You need your own copy of the Japan disc.
 
-**Download:** the [latest release](https://github.com/robertoqimin/battride-war-port/releases/latest) (v0.5.0) is an AppImage that imports your ISO, translates your own EBOOT and compiles the game on your computer. See [System requirements](#system-requirements-appimage).
+**Download:** the [latest release](https://github.com/robertoqimin/battride-war-recomp/releases/latest) (v0.5.0) is an AppImage that imports your ISO, translates your own EBOOT and compiles the game on your computer. See [System requirements](#system-requirements-appimage).
 
 ## Current status (October 26, 2026)
 

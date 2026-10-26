@@ -790,7 +790,7 @@ def main():
             text = re.sub(r'^#+ ', '', text, flags=re.M)
             text += ('\nLicense texts and THIRD_PARTY_NOTICES.md: ' + str(ROOT / 'usr/share/licenses') +
                      '\nCorresponding source code for every bundled component is published next to this '
-                     'AppImage on the release page:\nhttps://github.com/robertoqimin/battride-war-port/releases\n')
+                     'AppImage on the release page:\nhttps://github.com/robertoqimin/battride-war-recomp/releases\n')
             view.get_buffer().set_text(text)
             dialog.set_child(Gtk.ScrolledWindow(child=view, vexpand=True))
             dialog.present()
