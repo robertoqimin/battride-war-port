@@ -1,17 +1,17 @@
 # Linux AppImage
 
-The AppImage contains **no game code or assets**. It includes GCC optimization profiles: counts of how often each branch of the translated code ran while the developer played the opening mission, which make the build on your computer faster. They contain no game code, text, graphics or sound. (see "Optimization profiles" below). It carries the port's public sources (exactly the files in `PUBLIC_FILES.txt`), the pinned ps3recomp SDK, 7-Zip, FFmpeg and a compiler toolchain. On first launch it downloads the official RPCS3 build to decrypt your EBOOT, imports your disc, translates your own EBOOT into C and compiles the game for your CPU. Corresponding source for every bundled binary is published next to the AppImage on each release page (`BattrideWarPort-v<version>-sources.tar`; see [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)). It runs on distributions with glibc 2.35 or newer; see "System requirements" in the [README](../README.md) for CPUs, GPUs, RAM and disk. It has been run end to end on Fedora (Ryzen 5 4600H, GTX 1650); the RPCS3, 7-Zip and FFmpeg helpers were also started inside Ubuntu 22.04. Other distributions and GPUs require testing. It does not fix the remaining combat performance drops.
+The AppImage contains **no game code or assets**. It includes GCC optimization profiles: counts of how often each branch of the translated code ran while the developer played the opening mission, which make the build on your computer faster. They contain no game code, text, graphics or sound. (see "Optimization profiles" below). It carries the port's public sources (exactly the files in `PUBLIC_FILES.txt`), the pinned ps3recomp SDK, 7-Zip, FFmpeg and a compiler toolchain. On first launch it downloads the official RPCS3 build to decrypt your EBOOT, imports your disc, translates your own EBOOT into C and compiles the game for your CPU. Corresponding source for every bundled binary is published next to the AppImage on each release page (`BattrideWarRecomp-v<version>-sources.tar`; see [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)). It runs on distributions with glibc 2.35 or newer; see "System requirements" in the [README](../README.md) for CPUs, GPUs, RAM and disk. It has been run end to end on Fedora (Ryzen 5 4600H, GTX 1650); the RPCS3, 7-Zip and FFmpeg helpers were also started inside Ubuntu 22.04. Other distributions and GPUs require testing. It does not fix the remaining combat performance drops.
 
 ## Run
 
 Make the AppImage executable and open it:
 
 ```sh
-chmod +x BattrideWarPort-v0.5.0-x86_64.AppImage
-./BattrideWarPort-v0.5.0-x86_64.AppImage
+chmod +x BattrideWarRecomp-v0.5.0-x86_64.AppImage
+./BattrideWarRecomp-v0.5.0-x86_64.AppImage
 ```
 
-If FUSE is unavailable, run `./BattrideWarPort-v0.5.0-x86_64.AppImage --appimage-extract-and-run`.
+If FUSE is unavailable, run `./BattrideWarRecomp-v0.5.0-x86_64.AppImage --appimage-extract-and-run`.
 
 Select the Japan BLJS10220 ISO and click **Import ISO & Play**. The first launch:
 
@@ -29,8 +29,8 @@ On laptops with two GPUs the game picks the discrete one. If it picks the wrong 
 Headless checks:
 
 ```sh
-./BattrideWarPort-v0.5.0-x86_64.AppImage --check    # helpers and build tools start
-./BattrideWarPort-v0.5.0-x86_64.AppImage --import-only /path/game.iso --data-dir /new/empty/data   # import and build
+./BattrideWarRecomp-v0.5.0-x86_64.AppImage --check    # helpers and build tools start
+./BattrideWarRecomp-v0.5.0-x86_64.AppImage --import-only /path/game.iso --data-dir /new/empty/data   # import and build
 ```
 
 ## Build the AppImage
@@ -45,11 +45,11 @@ podman run --rm --userns=keep-id --security-opt label=disable \
   python3 scripts/build_appimage.py \
     --runtime /path/inputs/runtime-x86_64 \
     --sevenzip-dir /path/inputs/7zip-linux --stage build-appimage/v0.5.0/AppDir \
-    --pgo build-pgo11/pgo --output dist/BattrideWarPort-v0.5.0-x86_64.AppImage
+    --pgo build-pgo11/pgo --output dist/BattrideWarRecomp-v0.5.0-x86_64.AppImage
 # Corresponding source for the release page (runs as container root; needs network):
 podman run --rm --security-opt label=disable -v "$G:$G" -w "$PWD" battride-build:ubuntu22.04 \
   python3 scripts/collect_sources.py --stage build-appimage/v0.5.0/AppDir \
-    --out dist/BattrideWarPort-v0.5.0-sources.tar --runtime-commit <type2-runtime commit>
+    --out dist/BattrideWarRecomp-v0.5.0-sources.tar --runtime-commit <type2-runtime commit>
 ```
 
 `--pgo` takes GCC profiles trained with the AppImage's own compiler (see "Optimization profiles"); without it the AppImage builds the game without them.

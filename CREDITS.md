@@ -1,6 +1,6 @@
 # Credits
 
-Battride War Port exists thanks to the people and projects below. Licenses and redistribution details are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Battride War Recomp exists thanks to the people and projects below. Licenses and redistribution details are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## The game
 

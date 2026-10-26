@@ -143,7 +143,7 @@ def controls_text(controls):
     """controls.cfg for {'bindings': {name: [keys]}, 'mouse_sensitivity', 'invert_y',
     'pad': {name: button}, 'stick_deadzone'}."""
     bindings = controls.get('bindings', {})
-    out = ['# Battride War Port keyboard and mouse controls, written by the launcher.']
+    out = ['# Battride War Recomp keyboard and mouse controls, written by the launcher.']
     for name, _, default in CONTROLS:
         keys = bindings.get(name)
         keys = [k for k in keys if binding_ok(k)] if isinstance(keys, list) else [k.strip() for k in default.split(',') if k]

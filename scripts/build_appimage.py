@@ -187,9 +187,9 @@ ulimit -c 0
 exec "$APPDIR/usr/bin/python3" "$APPDIR/app/launcher.py" "$@"
 ''');(S/'AppRun').chmod(0o755)
 (S/'usr/lib/gio/modules').mkdir(parents=True,exist_ok=True)
-(S/'battride-port.desktop').write_text('[Desktop Entry]\nType=Application\nName=Battride War Port\nExec=AppRun\nIcon=battride-port\nCategories=Game;\nTerminal=false\n')
-(S/'battride-port.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128" rx="24" fill="#14232d"/><text x="64" y="83" font-size="60" text-anchor="middle" fill="#38dfa0" font-family="sans-serif">BR</text></svg>')
-(S/'.DirIcon').symlink_to('battride-port.svg')
+(S/'battride-recomp.desktop').write_text('[Desktop Entry]\nType=Application\nName=Battride War Recomp\nExec=AppRun\nIcon=battride-recomp\nCategories=Game;\nTerminal=false\n')
+(S/'battride-recomp.svg').write_text('<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128" rx="24" fill="#14232d"/><text x="64" y="83" font-size="60" text-anchor="middle" fill="#38dfa0" font-family="sans-serif">BR</text></svg>')
+(S/'.DirIcon').symlink_to('battride-recomp.svg')
 for n in ('LICENSE','THIRD_PARTY_NOTICES.md'):copy(P/n,S/'usr/share/licenses/port'/n)
 shutil.copytree('/usr/share/doc',S/'usr/share/licenses/build-packages',symlinks=True,ignore=shutil.ignore_patterns('examples','html'))
 print('STAGED',S,flush=True)

@@ -1,4 +1,4 @@
-# Battride War Port
+# Battride War Recomp
 
 An **experimental** native Linux port of Kamen Rider: Battride War (Japan), **BLJS10220**, built with PS3Recomp 0.17.0 and Vulkan. This project is not affiliated with the game's rights holders.
 
@@ -96,8 +96,8 @@ On hosts whose libstdc++ is older than RPCS3 needs (below `GLIBCXX_3.4.32`, e.g.
 ## Using the AppImage
 
 ```sh
-chmod +x BattrideWarPort-v0.5.0-x86_64.AppImage
-./BattrideWarPort-v0.5.0-x86_64.AppImage
+chmod +x BattrideWarRecomp-v0.5.0-x86_64.AppImage
+./BattrideWarRecomp-v0.5.0-x86_64.AppImage
 ```
 
 The launcher has five pages:

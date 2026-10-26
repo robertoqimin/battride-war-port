@@ -206,13 +206,13 @@ def main():
             self.log_offsets = {}
             self.log_current = None
             self.controls = saved.get('controls', {}) if isinstance(saved.get('controls'), dict) else {}
-            self.win = Adw.ApplicationWindow(application=app, title='Battride War Port')
+            self.win = Adw.ApplicationWindow(application=app, title='Battride War Recomp')
             self.win.set_default_size(880, 780)
             self.win.connect('close-request', self.close)
 
             header = Adw.HeaderBar()
             self.stack = Adw.ViewStack()
-            title = Adw.ViewSwitcherTitle(stack=self.stack, title='Battride War Port')
+            title = Adw.ViewSwitcherTitle(stack=self.stack, title='Battride War Recomp')
             header.set_title_widget(title)
             self.launch = Gtk.Button()
             self.launch.connect('clicked', self.on_launch)
@@ -860,7 +860,7 @@ def main():
         win.get_application().quit()
         return False
 
-    app = Adw.Application(application_id='io.github.robertoqimin.BattrideWarPort',
+    app = Adw.Application(application_id='io.github.robertoqimin.BattrideWarRecomp',
                           flags=Gio.ApplicationFlags.NON_UNIQUE)
 
     def activate(app):

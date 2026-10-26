@@ -122,8 +122,8 @@ def main():
     fetch(f'https://www.7-zip.org/a/7z{args.sevenzip_version}-src.tar.xz', extra / f'7z{args.sevenzip_version}-src.tar.xz')
 
     package = json.loads((args.stage / 'app/package.json').read_text())
-    out = ['# Corresponding source for Battride War Port %s' % package['version'], '',
-           'Source code for every third-party binary in `BattrideWarPort-v%s-x86_64.AppImage`. '
+    out = ['# Corresponding source for Battride War Recomp %s' % package['version'], '',
+           'Source code for every third-party binary in `BattrideWarRecomp-v%s-x86_64.AppImage`. '
            'The port\'s own code and the ps3recomp SDK are inside the AppImage in source form '
            '(`usr/share/battride/`) and in the project repository. RPCS3 is not redistributed: '
            'the launcher downloads the official build (source: %s).' % (package['version'], package['rpcs3']['source']),
