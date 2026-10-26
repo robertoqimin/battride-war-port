@@ -3,7 +3,7 @@
 ## PS3Recomp
 
 - Project: https://github.com/sp00nznet/ps3recomp
-- Revision used: `a6d76c895f77eb30b90a806c830544e61821b77f` (0.11.0).
+- Revision used: `a6d76c895f77eb30b90a806c830544e61821b77f` (0.17.0).
 - Copyright (c) 2026 Ned Heller / sp00nznet.
 - MIT license: full text preserved in `LICENSE`.
 
