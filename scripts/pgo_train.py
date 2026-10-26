@@ -48,6 +48,7 @@ def session(binary, work, seconds):
     with log_path.open('w') as log:
         proc = subprocess.Popen([str(binary), str(ROOT / 'game/EBOOT.ELF')], cwd=ROOT, env=env,
                                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        trained = False
         try:
             # The instrumented build runs at a few frames per second: be patient.
             start, next_press = time.monotonic(), time.monotonic() + 15
@@ -82,8 +83,14 @@ def session(binary, work, seconds):
                     pad.write_text('0x8000 18\n')
                     next_press = time.monotonic() + 1.5
                 time.sleep(.05)
+            trained = True
         finally:
-            if proc.poll() is None:
+            if proc.poll() is None and not trained:
+                # A session that never reached the fight must not add its
+                # menu counts to the profiles: SIGKILL writes nothing.
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+            elif proc.poll() is None:
                 os.killpg(proc.pid, signal.SIGTERM)      # writes the profiles
                 try:
                     proc.wait(timeout=300)
@@ -113,7 +120,7 @@ def main():
     for n in range(args.sessions):
         print('Training session %d of %d...' % (n + 1, args.sessions), flush=True)
         # The scripted menu route sometimes stalls before the fight: start the
-        # session again (the stalled attempt's menu counts stay, harmlessly).
+        # session again.
         for attempt in range(3):
             with tempfile.TemporaryDirectory(prefix='pgo-train-') as work:
                 try:
@@ -122,7 +129,7 @@ def main():
                 except SystemExit as e:
                     if attempt == 2 or not ('Combat not reached' in str(e) or 'stayed paused' in str(e)):
                         raise
-                    print('  %s; retrying' % e, flush=True)
+                    print('  %s; retrying (that attempt wrote no profiles)' % e, flush=True)
     record(build, profiles, spec, elf, args.sessions)
 
 

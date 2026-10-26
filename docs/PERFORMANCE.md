@@ -186,3 +186,13 @@ sources, and note that `.gcda` files only match the GCC version that made them.
 `PORT_PGO_DIR` chooses the private profile directory (default: build directory/pgo).
 Restore the normal build with `-DPORT_PGO=off`. Native CPU builds may not run on
 older CPUs; choose `PORT_MARCH` for the intended target when distributing binaries.
+
+## Combat benchmark and the frame's critical path (2026-10-25)
+
+`scripts/bench_combat.py --binary <game> --runs 3` plays the scripted route into STG02 and measures 60 s of fighting: average fps, p95/p99, frames over 16.7/33 ms, 1% low, worst 5 s, per-thread CPU (guest thread names from the log) and the draw-count range of the window. Run-to-run spread of the average is about ±3 fps, so compare builds with interleaved A/B runs (A, B, A, B, ...). Two traps it now avoids: the tutorial prompt pauses the first fight (identical draw counts in every `[fstat]` line), and the scripted menus sometimes stall (the run is retried). `pgo_train.py` has the same fixes and SIGKILLs a stalled attempt so it writes no profile.
+
+The game runs on wall-clock time (opening logos 20.2 s at 60 fps, 20.9 s with `PORT_FPS_LIMIT=20`) and caps itself at 60 fps. A `PS3_FTRACE` timeline shows each frame as the FIFO walker (`frame_clock`) processing the frame's commands (~12.5 ms), then the guest main thread working ~5.6 ms after the frame's fence. In frames over 20 ms the walker stays at ~13 ms and the main thread grows to ~10.5 ms, mostly building the command list (`func_005B2930`, chunk 020). `PORT_ENG_PROFILE=1` times `sink_end`'s parts per frame.
+
+Adopted (Ryzen 5 4600H, GTX 1650; average fighting fps 48 -> 58, worst 5 s 45 -> 47): busy threads on physical cores of their own (`thread_affinity.c`), two colour targets per guest address (the shadow pass and the scene shared address 0 and recreated two images a frame), faster vertex remap/fetch and index reads, a word-wise vertex-program hash, and the guarded fast store for every translated store (`store_wrap.c`).
+
+Measured and rejected: GameMode (no change; amd-pstate already boosts), C runtime at `-O3`, 1 us timer slack, a shorter fence publication gap, inline fast memory in chunks 016/020, profiles retrained on fighting, and GCC 12.3 with its own profiles (58.2 against 58.4 fps).

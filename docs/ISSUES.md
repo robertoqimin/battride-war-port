@@ -7,16 +7,17 @@ Levantamento de tudo o que foi reportado até 25/10/2026, com a situação atual
 | # | Problema | Área | Situação |
 |---|---|---|---|
 | 1 | Estouro do buffer de comandos gráficos (~19 MiB) | Gráficos / sincronização | Resolvido |
-| 2 | FPS muito baixo e variável em combate | Desempenho | Resolvido no combate medido (~48 fps de média, pior trecho ~43 fps na AppImage) |
+| 2 | FPS muito baixo e variável em combate | Desempenho | Resolvido no combate medido (~58 fps de média em luta, pior trecho de 5 s ~47 fps) |
 | 3 | FPS cai ao andar e com multidões | Desempenho | Resolvido (MAILBOX; ver item 2 para os números atuais) |
 | 4 | Áudio com interrupções e estalos | Áudio | Parcial: ainda quebra em combate (teste manual) |
 | 5 | Brilho excessivo intermitente | Gráficos | Não reproduzido (clarões conferidos com o original) |
 | 6 | Cores e efeitos especiais incorretos | Gráficos | Parcial: batem com o original; um artefato de 1 frame visto |
 | 17 | Sombras incorretas | Gráficos | Resolvido na primeira missão |
+| 18 | Sombras em posição errada durante o gameplay | Gráficos | Em aberto |
 | 7 | Conclusão de missões | Gameplay | Validado na primeira missão (teste manual) |
 | 8 | Jogo completo não validado | Gameplay | Em aberto |
 | 9 | Estabilidade prolongada | Estabilidade | Parcial (~30 min sem falhas) |
-| 10 | Thread principal do jogo saturada nas lutas mais cheias | Desempenho | Em aberto (98% de um núcleo nas quedas; ~25 fps relatado antes da v0.4.0, não remedido) |
+| 10 | Quadros pesados limitados pela montagem de comandos do jogo | Desempenho | Em aberto (pior trecho de 5 s ~47 fps; meta de 60) |
 | 11 | Áudio depende do firmware local | Áudio | Limitação conhecida |
 | 12 | Codec ATRAC não exercitado | Áudio | Não testado |
 | 13 | Encerramento limpo não validado em todos os caminhos | Estabilidade | Em aberto |
@@ -87,7 +88,13 @@ Só a primeira missão foi concluída; as demais não foram testadas.
 ### 9. Estabilidade prolongada — Parcial
 Houve ~30 min de missão contínua sem travamento e sem erros no log, até o limite de tempo do script de teste. Sessões mais longas, troca de fases e carregamentos repetidos não foram testados.
 
-### 10. Thread principal do jogo saturada nas lutas mais cheias — Em aberto
+### 10. Quadros pesados limitados pela montagem de comandos do jogo — Em aberto
+- **Medido (25/10/2026, linha do tempo `PS3_FTRACE` em luta na STG02):** um quadro é o processamento do FIFO pela thread `frame_clock` (~12,5 ms) seguido do trabalho da thread `main` depois da fence do quadro (~5,6 ms). Nos quadros acima de 20 ms, o FIFO continua em ~13 ms e a `main` passa a ~10,5 ms; 72% dela está na montagem da lista de comandos (`func_005B2930`, bloco traduzido `020`). A afirmação abaixo, de 24/10, de que a thread principal estava saturada a 98%, não vale mais: em combate nenhuma thread passa de ~80%, e elas esperam umas pelas outras.
+- **Feito em 25/10/2026** (A/B intercalado, `scripts/bench_combat.py`): núcleo físico próprio para as threads mais ocupadas (`thread_affinity.c`); render targets que eram recriados todo quadro mantidos em cache; busca de vértices, leitura de índices e hash do pipeline mais rápidos no processamento do FIFO; caminho rápido para todas as escritas do código traduzido (`store_wrap.c`). Média em luta: ~48 → ~58 fps; pior trecho de 5 s: ~45 → ~47.
+- **Testados e rejeitados em 25/10/2026:** GameMode (sem efeito nesta máquina), C do runtime em `-O3`, folga de timer de 1 µs, intervalo menor entre publicações de fence, caminho rápido inline nos blocos 016 e 020, PGO retreinado em luta e GCC 12.3 (58,2 contra 58,4 fps).
+- **Próximo passo possível:** melhorar o código que o tradutor do ps3recomp gera para a montagem de comandos (manter registradores do PPU em variáveis locais etc.), uma mudança no SDK.
+
+#### Histórico (24/10/2026)
 - **Medido (24/10/2026, perfil de CPU por thread em combate pesado na STG02):** sempre que o fps cai abaixo de ~50, a thread PPU principal do jogo fica em 98% de um núcleo; áudio (~45%), FIFO/Vulkan (~50%) e a outra thread PPU (~30%) têm folga. O fps nas quedas depende só da velocidade dessa thread.
 - **Feito desde então** (detalhes em `docs/PERFORMANCE.md`): leituras de relógio removidas dos locks de mutex do jogo (frames acima de 33 ms: 52 → 17), código traduzido em huge pages, e PGO treinado na primeira missão (pior trecho de 5 s: 35 → 43 fps na AppImage). Testados e rejeitados: huge pages na memória do jogo e o caminho rápido de memória em mais blocos gerados.
 - **Ainda em aberto:** um teste manual antes da v0.4.0 relatou ~25 fps nas lutas mais pesadas no Ryzen 5 4600H (~40 fps num Ryzen 7 5700X); não foi remedido com a v0.4.x. Opções restantes: instruções FMA (`-mfma`, uma decisão de portabilidade) e um GCC mais novo no toolchain da AppImage (~+5% medido com o GCC 16).
@@ -109,3 +116,7 @@ Com o jogo mais rápido, toques de 8 polls às vezes não eram registrados (o ST
 
 ### 16. Personagem não se move pelo direcional — Contornado
 Neste jogo o personagem só anda pelo analógico esquerdo, e o SDK só permite fixar o analógico desde o início (`PAD_STICK`). `PORT_PAD_STICK_FILE` (commit `1a8c94a`) permite controlar os dois analógicos por arquivo durante os testes.
+
+### 18. Sombras em posição errada durante o gameplay — Em aberto
+- **Sintoma (teste manual, 25/10/2026):** durante o gameplay, as sombras aparecem em posição errada em relação aos personagens e objetos.
+- **Situação:** registrado, ainda não investigado. É diferente do item 17, que corrigiu a direção da comparação de profundidade e a cor da borda do *shadow map*.
