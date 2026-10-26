@@ -2042,10 +2042,17 @@ static int vk_create_swapchain(void)
     VK_CHECK(pvkGetPhysicalDeviceSurfaceFormatsKHR(s_vk.phys, s_vk.surface, &nf, NULL),
              "vkGetPhysicalDeviceSurfaceFormatsKHR");
     if (nf == 0) { VK_LOG("surface reports no formats\n"); return -1; }
-    if (nf > 64) nf = 64;
-    VkSurfaceFormatKHR fmts[64];
-    VK_CHECK(pvkGetPhysicalDeviceSurfaceFormatsKHR(s_vk.phys, s_vk.surface, &nf, fmts),
-             "vkGetPhysicalDeviceSurfaceFormatsKHR");
+    /* RADV on Wayland with Mesa's colour management lists well over 64
+     * format/colour-space pairs. VK_INCOMPLETE only means some were left out
+     * of the array: the UNORM formats we want come early, so it is no error. */
+    VkSurfaceFormatKHR fmts[256];
+    if (nf > 256) nf = 256;
+    VkResult fr = pvkGetPhysicalDeviceSurfaceFormatsKHR(s_vk.phys, s_vk.surface, &nf, fmts);
+    if (fr != VK_SUCCESS && fr != VK_INCOMPLETE) {
+        VK_LOG("vkGetPhysicalDeviceSurfaceFormatsKHR failed (VkResult %d)\n", (int)fr);
+        return -1;
+    }
+    if (nf == 0) { VK_LOG("surface reports no formats\n"); return -1; }
     /* UNORM, not SRGB: the offscreen target holds the guest's values as-is. */
     VkSurfaceFormatKHR fmt = fmts[0];
     if (nf == 1 && fmts[0].format == VK_FORMAT_UNDEFINED) {
