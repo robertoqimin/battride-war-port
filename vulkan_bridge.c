@@ -4789,7 +4789,17 @@ int rsx_vulkan_backend_pump_messages(void)
             __atomic_store_n(&s_vk.sc_dirty, 1, __ATOMIC_RELEASE);
         }
     }
-    return quit ? -1 : 0;
+    /* Closing the window ends the game at once. Returning -1 only stopped this
+     * thread's drain: the window stayed up unanswered ("not responding") and
+     * the guest threads hung on fences. _exit, not exit: the guest threads are
+     * still running, and static destructors or a Vulkan teardown under them
+     * can hang or crash. The logs are flushed first. */
+    if (quit) {
+        printf("[RSX vulkan] window closed, exiting\n");
+        fflush(NULL);
+        _exit(0);
+    }
+    return 0;
 }
 
 void rsx_vulkan_backend_present(void)
