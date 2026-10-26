@@ -49,7 +49,7 @@ def thread_times(pid):
     return out
 
 
-def run_once(binary, seconds, extra_env, work, stacks=0, pin=0, prefix=()):
+def run_once(binary, seconds, extra_env, work, stacks=0, pin=0, prefix=(), dump=None):
     shutil.copytree(ROOT / 'gamedata', work / 'gamedata')
     pad = work / 'pad.txt'
     pad.touch()
@@ -62,6 +62,8 @@ def run_once(binary, seconds, extra_env, work, stacks=0, pin=0, prefix=()):
                PAD_STICK='128,128,128,128', PAD_NO_KEYBOARD='1', PAD_ALWAYS_CHANGE='1',
                PORT_GCM_FRAME_STATS='30', PORT_FRAME_TIMES=str(frames))
     env.update(extra_env)
+    if dump:
+        env.update(PORT_WINDOW_DUMP=str(dump), PORT_WINDOW_DUMP_TRIGGER=str(work / 'dump-now'))
     log_path = work / 'run.log'
     with log_path.open('w') as log:
         proc = subprocess.Popen([*prefix, str(binary), str(ROOT / 'game/EBOOT.ELF')], cwd=ROOT, env=env,
@@ -97,6 +99,7 @@ def run_once(binary, seconds, extra_env, work, stacks=0, pin=0, prefix=()):
             t0_ms = (t0 - start) * 1000.0
             print('combat measured from %.0f s after start' % (t0 - start), flush=True)
             next_press, samples, next_sample = 0, [], t0 + 5
+            dump_at = t0 + min(10.0, seconds / 2) if dump else None
             while time.monotonic() - t0 < seconds:
                 # Diagnostics only: each eu-stack snapshot stops the game briefly.
                 if stacks and len(samples) < stacks and time.monotonic() >= next_sample:
@@ -105,6 +108,9 @@ def run_once(binary, seconds, extra_env, work, stacks=0, pin=0, prefix=()):
                     next_sample = time.monotonic() + max(1.0, (seconds - 10) / stacks)
                 if proc.poll() is not None:
                     raise RuntimeError('the game exited during the benchmark; see ' + str(log_path))
+                if dump_at and time.monotonic() >= dump_at:   # one frame of the fight to --dump
+                    (work / 'dump-now').touch()
+                    dump_at = None
                 if time.monotonic() >= next_press:      # SQUARE: attack
                     pad.write_text('0x8000 18\n')
                     next_press = time.monotonic() + 1.5
@@ -205,6 +211,7 @@ def main():
     ap.add_argument('--seconds', type=float, default=60)
     ap.add_argument('--label', default='')
     ap.add_argument('--json', type=Path)
+    ap.add_argument('--dump', type=Path, help='write one fight frame (10 s in) to this PPM file')
     ap.add_argument('--keep-logs', type=Path, help='copy each run\'s game log here')
     ap.add_argument('--prefix', default='', help='command to start the game through, e.g. gamemoderun')
     ap.add_argument('--pin', type=int, default=0, help='experiment: give the N busiest threads a core each')
@@ -221,7 +228,8 @@ def main():
                 try:
                     try:
                         window, threads, stacks, draws = run_once(args.binary.resolve(), args.seconds, extra, Path(work),
-                                                           args.stacks, args.pin, args.prefix.split())
+                                                           args.stacks, args.pin, args.prefix.split(),
+                                                           args.dump.resolve() if args.dump else None)
                     finally:
                         if args.keep_logs and (Path(work) / 'run.log').exists():
                             args.keep_logs.mkdir(parents=True, exist_ok=True)

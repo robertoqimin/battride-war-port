@@ -112,6 +112,7 @@ typedef struct {
     int cleared;
     int had_write;
     int snapshot_valid;
+    u32 snapshot_w, snapshot_h; /* the region the snapshot holds */
     u64 depth_serial;      /* g.write_serial of the last depth write or clear */
     int guest_dirty;       /* written since guest memory last got a copy     */
     u32 zfmt, pitch;       /* SURFACE_FORMAT depth field and zeta pitch then */
@@ -941,16 +942,29 @@ static u32 eng_zdepth_get(u32 location, u32 offset, u32 rt_w, u32 rt_h)
  * a depth-WRITING draw: a write-enable bit alone does not prove the pass
  * produced a usable depth map, and a clear-only zeta falls through to guest
  * memory instead (rsx_live_draw.c:6016-6018, 6265-6269). */
-static u32 eng_zdepth_snapshot(u32 slot)
+/* The snapshot covers the texture the guest samples, w x h from the top-left,
+ * not the whole attachment: a depth target is sized to cover the canvas
+ * (1280x1024 for Battride War's 1024x1024 shadow map, see eng_zdepth_get),
+ * and a snapshot of all of it stretched the shadow map 1.25x across, which
+ * put every shadow to the right of what casts it. */
+static u32 eng_zdepth_snapshot(u32 slot, u32 w, u32 h)
 {
     eng_zdepth* z = &g.zdepths[slot];
     if (!z->handle || !z->had_write) return 0;
-    if (z->snapshot_valid && z->snapshot) return z->snapshot;
+    /* PORT_DEPTH_SNAPSHOT_FULL=1: the whole attachment, as before (comparison). */
+    static int full = -1;
+    if (full < 0) full = getenv("PORT_DEPTH_SNAPSHOT_FULL") ? 1 : 0;
+    if (full || !w || w > z->w) w = z->w;
+    if (full || !h || h > z->h) h = z->h;
+    if (z->snapshot_valid && z->snapshot && z->snapshot_w == w && z->snapshot_h == h)
+        return z->snapshot;
     if (!g.be->depth_snapshot) return 0;
-    const u32 tex = g.be->depth_snapshot(g.be->user, z->handle, z->w, z->h);
+    const u32 tex = g.be->depth_snapshot(g.be->user, z->handle, w, h);
     if (!tex) return 0;
     z->snapshot = tex;
     z->snapshot_valid = 1;
+    z->snapshot_w = w;
+    z->snapshot_h = h;
     return tex;
 }
 
@@ -2305,7 +2319,7 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
             /* DEPTH24_D8 keeps the backend's own snapshot when it has one;
              * anything else goes through guest memory. */
             if (base_fmt == RSX_TEX_FMT_DEPTH24_D8 && current_zslot != (u32)zsrc) {
-                const u32 snap = eng_zdepth_snapshot((u32)zsrc);
+                const u32 snap = eng_zdepth_snapshot((u32)zsrc, t.width, t.height);
                 if (snap) { textures[u] = snap; continue; }
             }
             if (eng_zdepth_to_guest((u32)zsrc)) {
@@ -2364,7 +2378,7 @@ static u32 sink_bind_textures(const u32* target_slots, u32 n_targets,
             for (u32 i = 0; i < g.n_zdepths; i++)
                 if (g.zdepths[i].location == t.location &&
                     g.zdepths[i].offset == t.offset && current_zslot != i) {
-                    const u32 snap = eng_zdepth_snapshot(i);
+                    const u32 snap = eng_zdepth_snapshot(i, t.width, t.height);
                     if (snap) textures[u] = snap;
                     break;
                 }

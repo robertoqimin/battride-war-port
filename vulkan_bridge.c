@@ -72,6 +72,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include <errno.h>
 
 /* ---------------------------------------------------------------------------
@@ -2397,7 +2398,10 @@ static void vk_window_rect(int32_t* x0, int32_t* y0, int32_t* x1, int32_t* y1)
 /* PORT_WINDOW_DUMP=<file>: write one frame as the window gets it (the FSR
  * output, or the frame at the internal resolution) to a PPM, once, after
  * PORT_WINDOW_DUMP_FRAME presented frames (default 600), to check scaling
- * without a screenshot tool. Debug only: it waits for the GPU. */
+ * without a screenshot tool. With PORT_WINDOW_DUMP_TRIGGER=<file> instead, the
+ * frame after that file appears is written (and the file removed), so a test
+ * script can pick a moment rather than a frame count. Debug only: it waits for
+ * the GPU. */
 static void vk_window_dump(VkCommandBuffer cb, VkImage img, u32 w, u32 h)
 {
     const char* path = getenv("PORT_WINDOW_DUMP");
@@ -2416,8 +2420,15 @@ static void vk_window_dump(VkCommandBuffer cb, VkImage img, u32 w, u32 h)
         s_vk.win_dump_state = 2;
         return;
     }
-    const char* at = getenv("PORT_WINDOW_DUMP_FRAME");
-    if (s_vk.presented < (at ? (u32)atoi(at) : 600u) ||
+    const char* trigger = getenv("PORT_WINDOW_DUMP_TRIGGER");
+    if (trigger && *trigger) {
+        if (access(trigger, F_OK) != 0) return;
+        unlink(trigger);
+    } else {
+        const char* at = getenv("PORT_WINDOW_DUMP_FRAME");
+        if (s_vk.presented < (at ? (u32)atoi(at) : 600u)) return;
+    }
+    if (
         vk_create_host_buffer(&s_vk.win_dump, (VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT))
         return;
     vk_barrier_image_on(cb, img, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_GENERAL);

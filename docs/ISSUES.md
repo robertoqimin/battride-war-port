@@ -13,7 +13,7 @@ Levantamento de tudo o que foi reportado até 25/10/2026, com a situação atual
 | 5 | Brilho excessivo intermitente | Gráficos | Não reproduzido (clarões conferidos com o original) |
 | 6 | Cores e efeitos especiais incorretos | Gráficos | Parcial: batem com o original; um artefato de 1 frame visto |
 | 17 | Sombras incorretas | Gráficos | Resolvido na primeira missão |
-| 18 | Sombras em posição errada durante o gameplay | Gráficos | Em aberto |
+| 18 | Sombras em posição errada durante o gameplay | Gráficos | Resolvido na primeira missão |
 | 7 | Conclusão de missões | Gameplay | Validado na primeira missão (teste manual) |
 | 8 | Jogo completo não validado | Gameplay | Em aberto |
 | 9 | Estabilidade prolongada | Estabilidade | Parcial (~30 min sem falhas) |
@@ -117,6 +117,8 @@ Com o jogo mais rápido, toques de 8 polls às vezes não eram registrados (o ST
 ### 16. Personagem não se move pelo direcional — Contornado
 Neste jogo o personagem só anda pelo analógico esquerdo, e o SDK só permite fixar o analógico desde o início (`PAD_STICK`). `PORT_PAD_STICK_FILE` (commit `1a8c94a`) permite controlar os dois analógicos por arquivo durante os testes.
 
-### 18. Sombras em posição errada durante o gameplay — Em aberto
-- **Sintoma (teste manual, 25/10/2026):** durante o gameplay, as sombras aparecem em posição errada em relação aos personagens e objetos.
-- **Situação:** registrado, ainda não investigado. É diferente do item 17, que corrigiu a direção da comparação de profundidade e a cor da borda do *shadow map*.
+### 18. Sombras em posição errada durante o gameplay — Resolvido na primeira missão
+- **Sintoma (teste manual, 25/10/2026):** durante o gameplay, as sombras apareciam deslocadas, como silhuetas soltas na diagonal, longe dos pés dos personagens.
+- **Causa:** o jogo desenha o *shadow map* num buffer de profundidade de 1024×1024, mas o motor cria o buffer com o tamanho que cobre a tela inteira, 1280×1024 (`eng_zdepth_get`). A cópia usada como textura pegava o buffer todo, e o shader lê com coordenadas normalizadas: o mapa ficava esticado 1,25× na horizontal, e cada sombra saía deslocada, mais longe quanto mais à direita no mapa.
+- **Correção:** `eng_zdepth_snapshot` copia só o tamanho que a textura do jogo declara (1024×1024, a partir do canto superior esquerdo). `PORT_DEPTH_SNAPSHOT_FULL=1` volta ao comportamento anterior para comparação.
+- **Verificado:** quadros da luta na STG02 antes e depois (gravados com `scripts/bench_combat.py --dump`), comparados com a gravação do jogo original (YouTube `u4YixUZPH30`): com a correção, a sombra de cada personagem sai dos pés, curta e para trás, como no original; antes, aparecia solta na diagonal. A cena do holofote, que usa o mesmo mapa, continua igual ao original (sombra longa saindo dos pés para baixo e à direita). Outras missões não foram verificadas.
