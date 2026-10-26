@@ -1,27 +1,28 @@
 # Battride War Port
 
-An **experimental** native Linux port of Kamen Rider: Battride War (Japan), **BLJS10220**, built with PS3Recomp 0.11.0 and Vulkan. This project is not affiliated with the game's rights holders.
+An **experimental** native Linux port of Kamen Rider: Battride War (Japan), **BLJS10220**, built with PS3Recomp 0.17.0 and Vulkan. This project is not affiliated with the game's rights holders.
 
 This repository contains the port's code, configuration, tests and instructions. **It does not include the game, ISO, EBOOT, firmware, keys, saves, a compiled game executable, or generated PPU/SPU sources.** You need your own copy of the Japan disc.
 
 **Download:** the [latest release](https://github.com/robertoqimin/battride-war-port/releases/latest) (v0.5.0) is an AppImage that imports your ISO, translates your own EBOOT and compiles the game on your computer. See [System requirements](#system-requirements-appimage).
 
-## Current status (October 25, 2026)
+## Current status (October 26, 2026)
 
 **Playable through the opening mission.** The intro movie, title screen, menus, the opening cutscene and mission **STG02** work, and STG02 was completed by hand, returning to mission select. The rest of the game has not been played.
 
 What works in the tested parts:
 
-- **Graphics:** scenery, characters with animation, enemies, HUD, special-attack effects and character shadows. Shadows, lighting and effects in the opening cutscene and STG02 were compared with footage of the original game and match.
+- **Graphics:** scenery, characters with animation, enemies, HUD, special-attack effects and character shadows, which fall from the characters' feet. Shadows, lighting and effects in the opening cutscene and STG02 were compared with footage of the original game and match.
 - **Audio:** music, voices and effects, with the game's audio SPU task and its MP3 codec translated to native code.
 - **Saves and data:** game data installation and saves; 21,107 installed files matched the disc byte for byte.
 - **Movies:** PAMF playback through `cellSail`.
 - **Input:** controllers through SDL2, and keyboard and mouse (see [Controls](#controls)); both can be used together.
 - **Display:** windowed, borderless fullscreen or exclusive fullscreen at a chosen resolution, internal rendering at up to 4× the PS3's resolution, AMD FSR 1 upscaling, and 16:9 kept with black bars (see [Display options](#display-options)).
+- **Launcher:** a GTK 4 / libadwaita window that imports the disc, builds the game, and sets the display, keyboard, controller and performance options, with a live log (see [Using the AppImage](#using-the-appimage)).
 
 Known issues ([docs/ISSUES.md](docs/ISSUES.md) has the full list, in Portuguese):
 
-- **Frame drops in the most crowded fights.** The game's main thread is the limit: it runs at 98% of a CPU core whenever the frame rate drops.
+- **Frame drops in the most crowded fights.** Ordinary fighting runs at about 55-58 fps, but the heaviest moments drop to about 45 fps: there the game's own command building on its main thread is the limit (see [Performance](#performance)).
 - **Audio** was measured without gaps in the title music and scripted combat, but a manual session still reported breakups during heavy fights, coinciding with frame drops.
 - **One graphics glitch:** a large untextured polygon was seen for a single frame at the start of a special attack and could not be reproduced.
 - **Not validated:** the full game, sessions longer than about 30 minutes, a clean exit on every path, and the ATRAC audio codec.
@@ -64,7 +65,7 @@ The AppImage contains no game code or assets. It includes GCC optimization profi
 | AMD FX (Bulldozer/Piledriver), A-series APUs, Jaguar | ARM and RISC-V |
 | Every AMD Ryzen, Threadripper and EPYC generation | |
 
-Single-thread speed decides the frame rate in combat, since one game thread is the limit. CPUs slower per core than a Ryzen 5 4600H will drop further in crowded fights; old CPUs without AVX2 will be noticeably slower.
+Per-core speed decides the frame rate in combat: each frame is the RSX command walker followed by the game's main thread, one after the other. CPUs slower per core than a Ryzen 5 4600H will drop further in crowded fights; old CPUs without AVX2 will be noticeably slower. With four or more physical cores the busiest threads get a core each (`PORT_THREAD_PIN=0` turns that off).
 
 **GPU:** Vulkan 1.0 with a graphics queue that can present to the window, `VK_KHR_swapchain` and `textureCompressionBC` (PS3 DXT textures). The launcher's graphics check rejects devices without BC textures.
 
@@ -90,7 +91,23 @@ Not supported: GPUs without Vulkan (NVIDIA Fermi and older, AMD TeraScale / HD 6
 
 On hosts whose libstdc++ is older than RPCS3 needs (below `GLIBCXX_3.4.32`, e.g. Ubuntu 22.04 and Debian 12) RPCS3's own `AppRun` uses its bundled `checkrt` libstdc++/libgcc_s. No compiler or development package is needed on the host: the bundled Ubuntu 22.04 toolchain builds against its own sysroot.
 
-**For more frames:** set the CPU governor to performance (`powerprofilesctl set performance`), run through `gamemoderun` if GameMode is installed, and keep laptops plugged in.
+**For more frames:** set the CPU governor to performance (`powerprofilesctl set performance`), leave the launcher's **GameMode** switch on if GameMode is installed, and keep laptops plugged in.
+
+## Using the AppImage
+
+```sh
+chmod +x BattrideWarPort-v0.5.0-x86_64.AppImage
+./BattrideWarPort-v0.5.0-x86_64.AppImage
+```
+
+The launcher has five pages:
+
+- **Game:** your ISO and the data folder (game files, saves, logs). **Install & Play** in the header imports the disc and builds the game the first time, and starts it afterwards; it becomes **Stop** while something runs.
+- **Settings:** display mode, resolution, upscaling, internal resolution, MangoHud and GameMode.
+- **Keyboard** and **Controller:** bindings, mouse sensitivity, stick dead zone and controller buttons (see [Controls](#controls)).
+- **Log:** the import, the build and the game's output as they happen, with copy and save buttons and the logs folder.
+
+Settings and bindings are saved as you change them and apply the next time the game starts. The status and the frame rate stay in a bar at the bottom of every page. For a report, send the `logs/` folder from the data folder (default `~/.local/share/battride-war-port`).
 
 ## Controls
 
@@ -125,10 +142,10 @@ The launcher's **Settings** page sets how the game is shown; Alt+Enter or F11 sw
 - **Windowed:** a resizable window, starting at the chosen size.
 - **Borderless fullscreen:** a window covering the desktop at its own resolution.
 - **Fullscreen:** exclusive fullscreen, switching the monitor to the chosen resolution (the closest it offers).
-- **Rendering (internal resolution):** the PS3 renders the game at 1280 × 720. The port can render it 2×, 3× or 4× larger in each direction (2560 × 1440, 3840 × 2160, 5120 × 2880): every render target, shadow map included, is that much bigger, so geometry, shadows and effects are drawn at the higher resolution instead of being stretched. Measured in STG02 combat on a GTX 1650: about 45 fps at native resolution, 42 at 2×, 31 at 3× and 21 at 4×; above 2× that GPU becomes the limit.
+- **Rendering (internal resolution):** the PS3 renders the game at 1280 × 720. The port can render it 2×, 3× or 4× larger in each direction (2560 × 1440, 3840 × 2160, 5120 × 2880): every render target, shadow map included, is that much bigger, so geometry, shadows and effects are drawn at the higher resolution instead of being stretched. Measured in STG02 combat on a GTX 1650 with v0.4.x: about 45 fps at native resolution, 42 at 2×, 31 at 3× and 21 at 4×; above 2× that GPU becomes the limit.
 - **Upscaling:** when the rendered frame is shown larger than it was rendered, it is upscaled with **AMD FidelityFX Super Resolution 1.0** (edge-adaptive upscaling and sharpening) or plain bilinear filtering; shown smaller (for example 2× on a 1080p screen), it is filtered down. The picture always keeps 16:9, with black bars on other aspect ratios.
 
-Outside the launcher, the same settings are environment variables of the game: `PORT_DISPLAY_MODE` (`windowed`, `borderless`, `fullscreen`), `PORT_DISPLAY_SIZE` (for example `2560x1440`), `PORT_RENDER_SCALE` (`1` to `4`), `PORT_DISPLAY_FILTER` (`fsr`, `linear`), `PORT_DISPLAY_STRETCH=1` to fill the window, and `PORT_FSR_SHARPNESS` (sharpening in stops, default 0.2; 0 is the strongest). `PORT_WINDOW_DUMP=<file>` writes one frame as the window receives it, for checking without a screenshot tool.
+Outside the launcher, the same settings are environment variables of the game: `PORT_DISPLAY_MODE` (`windowed`, `borderless`, `fullscreen`), `PORT_DISPLAY_SIZE` (for example `2560x1440`), `PORT_RENDER_SCALE` (`1` to `4`), `PORT_DISPLAY_FILTER` (`fsr`, `linear`), `PORT_DISPLAY_STRETCH=1` to fill the window, and `PORT_FSR_SHARPNESS` (sharpening in stops, default 0.2; 0 is the strongest). `PORT_WINDOW_DUMP=<file>` writes one frame as the window receives it, for checking without a screenshot tool (after `PORT_WINDOW_DUMP_FRAME` frames, or when the file named by `PORT_WINDOW_DUMP_TRIGGER` appears). `PORT_FPS_LIMIT=<fps>` caps the frame rate.
 
 ## Building from source
 
@@ -150,19 +167,21 @@ Generation refuses to overwrite existing results. Expect about 593 MiB of PPU so
 
 - `stubs.cpp`: game HLE adapters, blocking `sys_lwcond`, the optional graphics buffer expansion, and the CPU sampler (`PORT_PROFILE`).
 - `main.cpp`: the runner, including the huge-page remapping of the translated code (`PORT_HUGEPAGES=0` disables it) and the PGO training hooks.
-- `input_bridge.c`: the SDK's cellPad with keyboard and mouse merged into pad port 0 (`vulkan_bridge.c` captures the mouse).
+- `input_bridge.c`: controllers (first connected on port 0, radial dead zone, button remapping, `third_party/SDL_GameControllerDB/`) and keyboard and mouse merged into pad port 0 (`vulkan_bridge.c` captures the mouse).
+- `thread_affinity.c`: gives the busiest threads physical cores of their own.
 - `sync_bridge.c`: the SDK's Win32 compatibility layer with clock-free zero-timeout waits, used by every guest mutex lock.
-- `gcm_bridge.c`, `rsx_engine_bridge.c`, `vulkan_bridge.c`, `loader_bridge.cpp`: local adaptations of SDK implementations (the official checkout remains separate), including the RSX depth-comparison direction and texture border colours that the shadows need (`PORT_SHADOW_REVERSE=0` restores the SDK behaviour).
+- `gcm_bridge.c`, `rsx_engine_bridge.c`, `vulkan_bridge.c`, `loader_bridge.cpp`: local adaptations of SDK implementations (the official checkout remains separate), including the RSX depth-comparison direction, texture border colours and shadow-map snapshot size that the shadows need (`PORT_SHADOW_REVERSE=0` and `PORT_DEPTH_SNAPSHOT_FULL=1` restore the earlier behaviour), and two colour targets per guest address so passes that share one are not recreated every frame. `PORT_ENG_PROFILE=1` times the walker's per-draw work.
 - `vulkan_bridge.c` also holds the display modes and the internal resolution scale, which it applies at the backend's edges (target sizes, viewport and scissor, the fragment programs' screen position, and pixels crossing to or from guest memory) while the engine keeps the PS3's sizes.
 - `fsr1_bridge.c`, `shaders/fsr1.comp`, `fsr1_spv.h`: AMD FSR 1 upscaling for the window, with AMD's headers in `third_party/fsr1/` (`scripts/build_fsr1_shaders.py` regenerates the SPIR-V).
-- `rsx_vertex_bridge.c`: exact SIMD paths for common four-component vertex formats.
-- `include/port_ppu_memory.h`: guarded inline memory access in selected hot PPU chunks; reserved SPU lines and diagnostics retain the original accessors.
+- `rsx_vertex_bridge.c`: exact SIMD paths for common vertex formats, attribute-by-attribute batch fetching and a direct-table reference remap (`PORT_VERTEX_VERIFY=1` checks the batch path against the per-vertex one).
+- `include/port_ppu_memory.h`: guarded inline memory access in selected hot PPU chunks; `store_wrap.c` gives every other translated store the same fast path through the linker. Reserved SPU lines and diagnostics retain the original accessors.
 - `spu_bridge.c`: runs the audio task rejected by the static translator, translated where `scripts/lift_audio_spu.py` could and interpreted elsewhere (`PORT_AUDIO_INTERPRET=1` interprets all of it); another SPU image is generated and registered statically.
 - `spu_interp_bridge.c`, `spu_channels_bridge.c`: the SDK's SPU interpreter with a decode cache, and its channel layer with cached environment lookups.
 - `sail_bridge.cpp`, `sail_decoder.hpp`, `sail_audio.hpp`: PAMF callbacks, video, and audio. See [README_SAIL.md](README_SAIL.md).
 - `audio_bridge.c`, `fs_bridge.cpp`: local extensions to SDK audio and VFS.
 - `scripts/generate.py`: translates your EBOOT and inserts the one integration call `stubs.cpp` needs, located by its guest return address.
 - `packaging/`: the AppImage launcher and importer.
+- `scripts/bench_combat.py`: the combat benchmark (scripted route into STG02, average, p95, worst 5 s, per-thread CPU); `scripts/pgo_train.py` trains the optimization profiles on the same route.
 
 Local firmware codecs and their limitations are documented in [README_FIRMWARE.md](README_FIRMWARE.md). Diagnostic switches and measurement tools are in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
