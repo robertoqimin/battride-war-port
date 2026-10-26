@@ -89,8 +89,19 @@ if args.pgo:
                          %(args.pgo,info['gcc'],info['sdk_commit'],gcc,spec['sdk_commit']))
     files=sorted(args.pgo.rglob('*.gcda'))
     if len(files)!=info['files']:raise SystemExit('profile.json lists %d profiles, found %d'%(info['files'],len(files)))
-    for f in files:copy(f,S/'usr/share/battride/pgo'/f.relative_to(args.pgo))
-    copy(args.pgo/'profile.json',S/'usr/share/battride/pgo/profile.json')
+    # The SDK sources compiled into the game keep the training machine's SDK
+    # path in their profile names. Ship them under a neutral path instead of
+    # the developer's home directory; the importer renames from sdk_dir to the
+    # player's SDK copy (importer.place_profiles).
+    trained=info.get('sdk_dir','').replace('/','#')
+    neutral='/ps3recomp'
+    for f in files:
+        name=str(f.relative_to(args.pgo))
+        if trained:name=name.replace(trained,neutral.replace('/','#'))
+        copy(f,S/'usr/share/battride/pgo'/name)
+    (S/'usr/share/battride/pgo/profile.json').write_text(json.dumps(dict(info,sdk_dir=neutral),indent=2)+'\n')
+    if any('home#' in n.name for n in (S/'usr/share/battride/pgo').iterdir()):
+        raise SystemExit('A profile name still carries a home directory.')
 copy(sys.executable,S/'usr/bin/python3')
 version='%d.%d'%sys.version_info[:2]
 copytree(sysconfig.get_path('stdlib'),S/'usr/lib'/('python'+version),ignore=shutil.ignore_patterns('site-packages','dist-packages','__pycache__','test','tests','idlelib','ensurepip','venv'))
