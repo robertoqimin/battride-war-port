@@ -32,7 +32,7 @@ Check that the list contains no `game/`, `firmware/`, `gamedata/`, `src/recomp/`
 
 ```bash
 git commit -m "Prepare experimental source release"
-git remote add origin https://github.com/YOUR_USERNAME/kamenriderbattridewarsport.git
+git remote add origin https://github.com/YOUR_USERNAME/battride-war-recomp.git
 git push -u origin main
 ```
 
@@ -40,6 +40,6 @@ Replace `YOUR_USERNAME`. If Git, remotes, or commits already exist, inspect the 
 
 Suggested description:
 
-> Experimental Kamen Rider: Battride War (BLJS10220) port using PS3Recomp and Vulkan. The start of the mission has been validated with movement, pause, and attacks; performance is low and visual glitches remain. Requires local game data and PPU/SPU generation. No game, firmware, keys, or saves included.
+> Battride War Recomp: an experimental native Linux port of Kamen Rider: Battride War (BLJS10220) built with PS3Recomp and Vulkan. Playable through the opening mission (STG02), about 55-58 fps in ordinary fighting on a Ryzen 5 4600H. The AppImage builds the game from your own disc; no game, firmware, keys, or saves included.
 
 Do not advertise this as a complete game or stable port. The documentation describes exactly the section validated. Licenses and credits are in `LICENSE` and `THIRD_PARTY_NOTICES.md`.

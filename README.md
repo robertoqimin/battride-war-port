@@ -6,6 +6,8 @@ This repository contains the port's code, configuration, tests and instructions.
 
 **Download:** the [latest release](https://github.com/robertoqimin/battride-war-recomp/releases/latest) (v0.5.0) is an AppImage that imports your ISO, translates your own EBOOT and compiles the game on your computer. See [System requirements](#system-requirements-appimage).
 
+The project was called **Battride War Port** (repository `battride-war-port`) until v0.5.0. Old links redirect here, and the data folder keeps its old name, `~/.local/share/battride-war-port`, so existing installs and saves carry over.
+
 ## Current status (October 26, 2026)
 
 **Playable through the opening mission.** The intro movie, title screen, menus, the opening cutscene and mission **STG02** work, and STG02 was completed by hand, returning to mission select. The rest of the game has not been played.
@@ -163,7 +165,7 @@ cmake --build --preset linux-vulkan -j2
 
 Generation refuses to overwrite existing results. Expect about 593 MiB of PPU sources and more for building. Each generated chunk takes about 1.5 GB of RAM to compile, so limit parallel jobs to the memory you have (`-j2` on 16 GB with a desktop running). The build uses clang for C and GCC for C++. The AppImage itself is built in an Ubuntu 22.04 container ([docs/APPIMAGE.md](docs/APPIMAGE.md)), including the optional optimization profiles (`scripts/pgo_train.py`).
 
-## Port components
+## Components
 
 - `stubs.cpp`: game HLE adapters, blocking `sys_lwcond`, the optional graphics buffer expansion, and the CPU sampler (`PORT_PROFILE`).
 - `main.cpp`: the runner, including the huge-page remapping of the translated code (`PORT_HUGEPAGES=0` disables it) and the PGO training hooks.
