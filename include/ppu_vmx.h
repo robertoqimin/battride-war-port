@@ -32,6 +32,9 @@ extern "C" {
 #define VMX_SAT 0x00000001u
 #define VMX_NJ  0x00010000u
 #define VMX_INL static inline
+/* The SIMD float ops are a few instructions each; GCC left them out of line in
+ * the largest generated functions, a call per vector instruction. */
+#define VMX_SIMD_INL static inline __attribute__((always_inline))
 
 /* ---- element access (big-endian) ---- */
 VMX_INL uint16_t vmx_h(const uint8_t* v, int i) { return (uint16_t)(v[2 * i] << 8 | v[2 * i + 1]); }
@@ -279,36 +282,36 @@ VMX_INL float vmx_minf(float x, float y) {
 #if defined(__SSE4_1__) && defined(__FMA__)
 #include <immintrin.h>
 /* Big-endian words <-> host lanes. */
-VMX_INL __m128i vmx_ld(const void* p) {
+VMX_SIMD_INL __m128i vmx_ld(const void* p) {
     return _mm_shuffle_epi8(_mm_loadu_si128((const __m128i*)p),
                             _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12));
 }
-VMX_INL void vmx_st(void* p, __m128i v) {
+VMX_SIMD_INL void vmx_st(void* p, __m128i v) {
     _mm_storeu_si128((__m128i*)p, _mm_shuffle_epi8(v,
                      _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12)));
 }
 /* vmx_flush on every lane: denormals to signed zero in non-Java mode. */
-VMX_INL __m128i vmx_vflush(__m128i x, uint32_t vscr) {
+VMX_SIMD_INL __m128i vmx_vflush(__m128i x, uint32_t vscr) {
     if (!(vscr & VMX_NJ)) return x;
     const __m128i den = _mm_cmpeq_epi32(_mm_and_si128(x, _mm_set1_epi32(0x7F800000)), _mm_setzero_si128());
     return _mm_blendv_epi8(x, _mm_and_si128(x, _mm_set1_epi32((int)0x80000000u)), den);
 }
-VMX_INL __m128i vmx_visnan(__m128i x) {
+VMX_SIMD_INL __m128i vmx_visnan(__m128i x) {
     return _mm_cmpgt_epi32(_mm_and_si128(x, _mm_set1_epi32(0x7FFFFFFF)), _mm_set1_epi32(0x7F800000));
 }
 /* vmx_fix: any NaN result becomes the default NaN. */
-VMX_INL __m128i vmx_vfix(__m128i r) {
+VMX_SIMD_INL __m128i vmx_vfix(__m128i r) {
     return _mm_blendv_epi8(r, _mm_set1_epi32(0x7FC00000), vmx_visnan(r));
 }
 /* vmx_vnan2: a NaN in A, else in B, quieted; else vmx_fix(r). */
-VMX_INL __m128i vmx_vvnan2(__m128i r, __m128i a, __m128i b) {
+VMX_SIMD_INL __m128i vmx_vvnan2(__m128i r, __m128i a, __m128i b) {
     const __m128i q = _mm_set1_epi32(0x7FC00000);
     r = vmx_vfix(r);
     r = _mm_blendv_epi8(r, _mm_or_si128(b, q), vmx_visnan(b));
     return _mm_blendv_epi8(r, _mm_or_si128(a, q), vmx_visnan(a));
 }
 #define VMX_FBIN_SIMD(name, op) \
-VMX_INL void name(VMX_D, VMX_A, VMX_B, uint32_t vscr) { \
+VMX_SIMD_INL void name(VMX_D, VMX_A, VMX_B, uint32_t vscr) { \
     const __m128i x = vmx_vflush(vmx_ld(a_), vscr), y = vmx_vflush(vmx_ld(b_), vscr); \
     const __m128i z = _mm_castps_si128(op(_mm_castsi128_ps(x), _mm_castsi128_ps(y))); \
     vmx_st(d_, vmx_vflush(vmx_vvnan2(z, x, y), vscr)); }
@@ -323,14 +326,14 @@ VMX_FBIN(vmx_vminfp, vmx_minf(vmx_f(x), vmx_f(y)), 0)
 
 #if defined(__SSE4_1__) && defined(__FMA__)
 /* d = a*c + b, one rounding; then vmx_fix and the output flush. */
-VMX_INL void vmx_vmaddfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) {
+VMX_SIMD_INL void vmx_vmaddfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) {
     const __m128 x = _mm_castsi128_ps(vmx_vflush(vmx_ld(a_), vscr));
     const __m128 y = _mm_castsi128_ps(vmx_vflush(vmx_ld(b_), vscr));
     const __m128 z = _mm_castsi128_ps(vmx_vflush(vmx_ld(c_), vscr));
     vmx_st(d_, vmx_vflush(vmx_vfix(_mm_castps_si128(_mm_fmadd_ps(x, z, y))), vscr)); }
 /* d = -(a*c - b): fmsub then a sign flip, which keeps -0 where the scalar
  * -fmaf(x, z, -y) gives it (fnmadd would give +0). */
-VMX_INL void vmx_vnmsubfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) {
+VMX_SIMD_INL void vmx_vnmsubfp(VMX_D, VMX_A, VMX_B, VMX_C, uint32_t vscr) {
     const __m128 x = _mm_castsi128_ps(vmx_vflush(vmx_ld(a_), vscr));
     const __m128 y = _mm_castsi128_ps(vmx_vflush(vmx_ld(b_), vscr));
     const __m128 z = _mm_castsi128_ps(vmx_vflush(vmx_ld(c_), vscr));
@@ -354,8 +357,22 @@ VMX_INL void name(VMX_D, VMX_B, uint32_t vscr) { const uint8_t* b = (const uint8
     for (int i = 0; i < 4; i++) { uint32_t y = vmx_w(b, i); if (flush_in) y = vmx_flush(y, vscr); \
         float f = vmx_f(y); uint32_t z = vmx_u(expr); \
         vmx_sw(r, i, nanmode == 2 ? vmx_flush(vmx_vnan1(z, y), vscr) : vmx_fix(z)); } VMX_OUT; }
+#if defined(__SSE4_1__) && defined(__FMA__)
+/* VMX_FUN's flush_in = 1, nanmode = 2 form: divps and sqrtps round exactly as
+ * the scalar 1.0f / f and 1.0f / sqrtf(f) do. */
+#define VMX_FUN_SIMD(name, op) \
+VMX_SIMD_INL void name(VMX_D, VMX_B, uint32_t vscr) { \
+    const __m128i y = vmx_vflush(vmx_ld(b_), vscr); \
+    __m128i r = vmx_vfix(_mm_castps_si128(_mm_div_ps(_mm_set1_ps(1.0f), op(_mm_castsi128_ps(y))))); \
+    r = _mm_blendv_epi8(r, _mm_or_si128(y, _mm_set1_epi32(0x7FC00000)), vmx_visnan(y)); \
+    vmx_st(d_, vmx_vflush(r, vscr)); }
+#define VMX_SIMD_SAME(x) (x)
+VMX_FUN_SIMD(vmx_vrefp, VMX_SIMD_SAME)
+VMX_FUN_SIMD(vmx_vrsqrtefp, _mm_sqrt_ps)
+#else
 VMX_FUN(vmx_vrefp, 1.0f / f, 1, 2)
 VMX_FUN(vmx_vrsqrtefp, 1.0f / sqrtf(f), 1, 2)
+#endif
 VMX_FUN(vmx_vexptefp, exp2f(f), 0, 1)
 VMX_FUN(vmx_vlogefp, log2f(f), 0, 1)
 VMX_FUN(vmx_vrfin, nearbyintf(f), 0, 2)      /* host default rounding: to nearest even */
@@ -400,9 +417,23 @@ VMX_CMP(vmx_vcmpgtuw, 4, vmx_w, vmx_sw64, x > y)
 VMX_CMP(vmx_vcmpgtsb, 16, vmx_b, vmx_sb64, (int8_t)x > (int8_t)y)
 VMX_CMP(vmx_vcmpgtsh, 8, vmx_h, vmx_sh64, (int16_t)x > (int16_t)y)
 VMX_CMP(vmx_vcmpgtsw, 4, vmx_w, vmx_sw64, (int32_t)x > (int32_t)y)
+#if defined(__SSE4_1__) && defined(__FMA__)
+/* Ordered compares, false on NaN and +0 == -0, as the scalar C operators;
+ * returns CR6 (all << 3 | none << 1). */
+#define VMX_CMP_SIMD(name, op) \
+VMX_SIMD_INL uint32_t name(VMX_D, VMX_A, VMX_B) { \
+    const __m128 m = op(_mm_castsi128_ps(vmx_ld(a_)), _mm_castsi128_ps(vmx_ld(b_))); \
+    _mm_storeu_si128((__m128i*)d_, _mm_castps_si128(m)); \
+    const int bits = _mm_movemask_ps(m); \
+    return (uint32_t)((bits == 0xF) << 3 | (bits == 0) << 1); }
+VMX_CMP_SIMD(vmx_vcmpeqfp, _mm_cmpeq_ps)
+VMX_CMP_SIMD(vmx_vcmpgefp, _mm_cmpge_ps)
+VMX_CMP_SIMD(vmx_vcmpgtfp, _mm_cmpgt_ps)
+#else
 VMX_CMP(vmx_vcmpeqfp, 4, vmx_w, vmx_sw64, vmx_f((uint32_t)x) == vmx_f((uint32_t)y))
 VMX_CMP(vmx_vcmpgefp, 4, vmx_w, vmx_sw64, vmx_f((uint32_t)x) >= vmx_f((uint32_t)y))
 VMX_CMP(vmx_vcmpgtfp, 4, vmx_w, vmx_sw64, vmx_f((uint32_t)x) > vmx_f((uint32_t)y))
+#endif
 /* vcmpbfp: bit 31 = !(a <= b), bit 30 = !(a >= -b); CR6 EQ = every lane in bounds */
 VMX_INL uint32_t vmx_vcmpbfp(VMX_D, VMX_A, VMX_B) { VMX_ARGS_PREP; int inb = 1;
     for (int i = 0; i < 4; i++) { float x = vmx_f(vmx_w(a, i)), y = vmx_f(vmx_w(b, i));

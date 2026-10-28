@@ -16,6 +16,11 @@ extern "C" void $1_madd(void* d, const void* a, const void* b, const void* c, ui
 extern "C" void $1_nmsub(void* d, const void* a, const void* b, const void* c, uint32_t v) { vmx_vnmsubfp(d, a, b, c, v); }
 extern "C" void $1_add(void* d, const void* a, const void* b, uint32_t v) { vmx_vaddfp(d, a, b, v); }
 extern "C" void $1_sub(void* d, const void* a, const void* b, uint32_t v) { vmx_vsubfp(d, a, b, v); }
+extern "C" void $1_re(void* d, const void* b, uint32_t v) { vmx_vrefp(d, b, v); }
+extern "C" void $1_rsqrte(void* d, const void* b, uint32_t v) { vmx_vrsqrtefp(d, b, v); }
+extern "C" uint32_t $1_cmpeq(void* d, const void* a, const void* b) { return vmx_vcmpeqfp(d, a, b); }
+extern "C" uint32_t $1_cmpge(void* d, const void* a, const void* b) { return vmx_vcmpgefp(d, a, b); }
+extern "C" uint32_t $1_cmpgt(void* d, const void* a, const void* b) { return vmx_vcmpgtfp(d, a, b); }
 EOF
 }
 gen ref; gen port

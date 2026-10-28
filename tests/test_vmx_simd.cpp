@@ -12,6 +12,16 @@ void ref_add(void*, const void*, const void*, uint32_t);
 void port_add(void*, const void*, const void*, uint32_t);
 void ref_sub(void*, const void*, const void*, uint32_t);
 void port_sub(void*, const void*, const void*, uint32_t);
+void ref_re(void*, const void*, uint32_t);
+void port_re(void*, const void*, uint32_t);
+void ref_rsqrte(void*, const void*, uint32_t);
+void port_rsqrte(void*, const void*, uint32_t);
+uint32_t ref_cmpeq(void*, const void*, const void*);
+uint32_t port_cmpeq(void*, const void*, const void*);
+uint32_t ref_cmpge(void*, const void*, const void*);
+uint32_t port_cmpge(void*, const void*, const void*);
+uint32_t ref_cmpgt(void*, const void*, const void*);
+uint32_t port_cmpgt(void*, const void*, const void*);
 }
 static int diff(const char* op, const uint8_t* a, const uint8_t* b, const uint8_t* c,
                 const uint8_t* r1, const uint8_t* r2, uint32_t vscr) {
@@ -40,7 +50,18 @@ int main() {
         ref_nmsub(r1, a, b, c, vscr); port_nmsub(r2, a, b, c, vscr); if (diff("nmsub", a, b, c, r1, r2, vscr)) return 1;
         ref_add(r1, a, b, vscr); port_add(r2, a, b, vscr); if (diff("add", a, b, nullptr, r1, r2, vscr)) return 1;
         ref_sub(r1, a, b, vscr); port_sub(r2, a, b, vscr); if (diff("sub", a, b, nullptr, r1, r2, vscr)) return 1;
+        ref_re(r1, b, vscr); port_re(r2, b, vscr); if (diff("re", a, b, nullptr, r1, r2, vscr)) return 1;
+        ref_rsqrte(r1, b, vscr); port_rsqrte(r2, b, vscr); if (diff("rsqrte", a, b, nullptr, r1, r2, vscr)) return 1;
+        // Compares: equal lanes in a and b half the time, so all/none both occur.
+        if (it & 2) memcpy(b, a, 8);
+        if (it & 4) memcpy(b + 8, a + 8, 8);
+        { const uint32_t x = ref_cmpeq(r1, a, b), y = port_cmpeq(r2, a, b);
+          if (diff("cmpeq", a, b, nullptr, r1, r2, 0) || x != y) { std::printf("cmpeq cr6 %x/%x\n", x, y); return 1; } }
+        { const uint32_t x = ref_cmpge(r1, a, b), y = port_cmpge(r2, a, b);
+          if (diff("cmpge", a, b, nullptr, r1, r2, 0) || x != y) { std::printf("cmpge cr6 %x/%x\n", x, y); return 1; } }
+        { const uint32_t x = ref_cmpgt(r1, a, b), y = port_cmpgt(r2, a, b);
+          if (diff("cmpgt", a, b, nullptr, r1, r2, 0) || x != y) { std::printf("cmpgt cr6 %x/%x\n", x, y); return 1; } }
         checked += 4;
     }
-    std::printf("PASS: vmaddfp/vnmsubfp/vaddfp/vsubfp SIMD == scalar on %lu vectors (both NJ modes)\n", checked);
+    std::printf("PASS: vmaddfp/vnmsubfp/vaddfp/vsubfp/vrefp/vrsqrtefp/vcmpeqfp/vcmpgefp/vcmpgtfp SIMD == scalar on %lu vectors (both NJ modes)\n", checked);
 }
