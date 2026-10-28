@@ -76,9 +76,24 @@ def session(binary, work, seconds):
             else:
                 raise SystemExit('The first fight stayed paused; see ' + str(log_path))
             end, next_press = time.monotonic() + seconds, 0
+            next_check, checked_at, unfreezes = time.monotonic() + 1, 0, 0
             while time.monotonic() < end:
                 if proc.poll() is not None:
                     raise SystemExit('The game exited during training; see ' + str(log_path))
+                # A later tutorial prompt pauses the fight again, and SQUARE
+                # does not close it: the profiles then came mostly from the
+                # paused screen. Same rule as bench_combat.py: four [fstat]
+                # lines with one draw count are a pause; START closes a prompt,
+                # CIRCLE a dialogue box.
+                if time.monotonic() >= next_check:
+                    next_check = time.monotonic() + 1.0
+                    recent = re.findall(r'\[fstat\] flips=30.*?draws=(\d+)/frame',
+                                        log_path.read_text(errors='replace'))
+                    if len(recent) >= checked_at + 4 and len(set(recent[-4:])) == 1:
+                        pad.write_text('0x0008 40\n' if unfreezes % 2 == 0 else '0x2000 40\n')
+                        unfreezes += 1
+                        checked_at = len(recent)
+                        next_press = time.monotonic() + 1.5
                 if time.monotonic() >= next_press:      # SQUARE: attack
                     pad.write_text('0x8000 18\n')
                     next_press = time.monotonic() + 1.5
