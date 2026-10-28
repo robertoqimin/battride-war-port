@@ -1526,9 +1526,113 @@ static u32 eng_cube_mask(void)
  * layout and by the pipeline, because they must not disagree: the built-in
  * program declares all sixteen inputs, so narrowing the layout for it would
  * leave the pipeline's vertex descriptor short of what the shader reads. */
+/* Fragment program memo. Every draw walked its fragment program five times
+ * (size, structural hash, sampled, gamma and expand units) and cleared the
+ * 32 KB constant block twice: about 12% of the frame clock thread in crowded
+ * STG02 combat. A program is now analysed once per address and reused while
+ * its instruction blocks are unchanged. Its inline constant slots are not
+ * compared, since titles patch them in place between draws; they are read
+ * again on every draw. A branch with a CONST-typed operand is never memoised:
+ * the size walk skips a slot after it and the texture walks do not, so the
+ * texture results would depend on constant bytes. PORT_FP_MEMO=0 turns the
+ * memo off; PORT_FP_MEMO=check recomputes every hit and reports mismatches. */
+typedef struct {
+    const u8* uc;           /* host address of the program; NULL: free */
+    u32 size;               /* rsx_fp_program_size */
+    u64 hash;               /* rsx_fp_structural_hash, FNV offset basis seed */
+    u32 tex_units;          /* rsx_fp_texture_units */
+    u32 gamma_units;        /* rsx_fp_texture_gamma_units, every mask set */
+    u32 expand_units;       /* rsx_fp_texture_expand_units, every mask set */
+    int const_ok;           /* rsx_fp_collect_constants succeeded */
+    u32 n_instr, n_const;
+    u16* instr_off;         /* byte offsets of instruction and constant blocks */
+    u16* const_off;
+    u8* code;               /* the program as analysed */
+} eng_fp_memo;
+
+#define ENG_FP_MEMO_SLOTS 256u
+static eng_fp_memo s_fp_memo[ENG_FP_MEMO_SLOTS];
+static int s_fp_memo_mode = -1;     /* 0 off, 1 on, 2 on and checked */
+static rsx_fp_constant_block s_fp_memo_scratch;
+
+static eng_fp_memo* eng_fp_memo_slot(const u8* uc)
+{
+    return &s_fp_memo[(u32)(((uintptr_t)uc >> 4) * 0x9E3779B97F4A7C15ull >> 56) % ENG_FP_MEMO_SLOTS];
+}
+
+/* The memo for the program at uc, if its instruction blocks still match. */
+static const eng_fp_memo* eng_fp_memo_find(const u8* uc)
+{
+    const eng_fp_memo* m = eng_fp_memo_slot(uc);
+    if (m->uc != uc) return NULL;
+    for (u32 i = 0; i < m->n_instr; i++)
+        if (memcmp(m->code + m->instr_off[i], uc + m->instr_off[i], 16)) return NULL;
+    return m;
+}
+
+static const eng_fp_memo* eng_fp_memo_add(const u8* uc, u32 size)
+{
+    eng_fp_memo* m = eng_fp_memo_slot(uc);
+    free(m->instr_off); free(m->const_off); free(m->code);
+    memset(m, 0, sizeof *m);
+    const u32 blocks = size / 16u;
+    m->instr_off = (u16*)malloc(blocks * sizeof(u16));
+    m->const_off = (u16*)malloc(blocks * sizeof(u16));
+    m->code = (u8*)malloc(size);
+    if (!m->instr_off || !m->const_off || !m->code) goto fail;
+    for (u32 off = 0; off + 16 <= size;) {
+        const u32 w0 = rsx_fp_read_word(uc + off), w1 = rsx_fp_read_word(uc + off + 4);
+        const u32 w2 = rsx_fp_read_word(uc + off + 8), w3 = rsx_fp_read_word(uc + off + 12);
+        m->instr_off[m->n_instr++] = (u16)off;
+        off += 16;
+        if ((w1 & 3u) == 2u || (w2 & 3u) == 2u || (w3 & 3u) == 2u) {
+            if (w2 & (1u << 31)) goto fail;       /* branch: see above */
+            if (off + 16 <= size) m->const_off[m->n_const++] = (u16)off;
+            off += 16;
+        }
+        if (w0 & 1u) break;                       /* END */
+    }
+    static const u8 all[RSX_DSP_NUM_TEXTURES] = { 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1 };
+    memcpy(m->code, uc, size);
+    m->size = size;
+    m->hash = rsx_fp_structural_hash(uc, size, 1469598103934665603ull);
+    m->tex_units = rsx_fp_texture_units(uc, size);
+    m->gamma_units = rsx_fp_texture_gamma_units(uc, size, all);
+    m->expand_units = rsx_fp_texture_expand_units(uc, size, all);
+    m->const_ok = rsx_fp_collect_constants(uc, size, &s_fp_memo_scratch) >= 0 &&
+                  s_fp_memo_scratch.count == m->n_const;
+    m->uc = uc;
+    return m;
+fail:
+    free(m->instr_off); free(m->const_off); free(m->code);
+    memset(m, 0, sizeof *m);
+    return NULL;
+}
+
+/* The units of mask[] that are set, as a bit mask. */
+static u32 eng_unit_bits(const u8 mask[RSX_DSP_NUM_TEXTURES])
+{
+    u32 bits = 0;
+    for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++)
+        if (mask[u]) bits |= 1u << u;
+    return bits;
+}
+
+static int eng_guest_programs_ex(const u8** out_vp, u32* out_vp_instrs,
+                                 const u8** out_fp, u32* out_fp_size,
+                                 const eng_fp_memo** out_memo);
+
 static int eng_guest_programs(const u8** out_vp, u32* out_vp_instrs,
                               const u8** out_fp, u32* out_fp_size)
 {
+    return eng_guest_programs_ex(out_vp, out_vp_instrs, out_fp, out_fp_size, NULL);
+}
+
+static int eng_guest_programs_ex(const u8** out_vp, u32* out_vp_instrs,
+                                 const u8** out_fp, u32* out_fp_size,
+                                 const eng_fp_memo** out_memo)
+{
+    const eng_fp_memo* memo = NULL;
     const u8* vp_uc = NULL;
     u32 vp_instrs = 0;
     const u32 start = rsx_dsp_vp_start(&g.rsx);
@@ -1547,15 +1651,29 @@ static int eng_guest_programs(const u8** out_vp, u32* out_vp_instrs,
         u32 fp_loc = 0;
         const u32 fp_off = rsx_dsp_fragment_program(&g.rsx, &fp_loc);
         fp_uc = eng_guest_ptr(NULL, fp_loc, fp_off, 16);
-        fp_size = fp_uc ? rsx_fp_program_size(fp_uc, ENG_FP_MAX_BYTES) : 0;
-        if (fp_size) fp_uc = eng_guest_ptr(NULL, fp_loc, fp_off, fp_size);
-        if (!fp_uc) fp_size = 0;
+        if (s_fp_memo_mode < 0) {
+            const char* v = getenv("PORT_FP_MEMO");
+            s_fp_memo_mode = !v ? 1 : !strcmp(v, "check") ? 2 : atoi(v) ? 1 : 0;
+        }
+        if (fp_uc && s_fp_memo_mode && (memo = eng_fp_memo_find(fp_uc)) != NULL &&
+            eng_guest_ptr(NULL, fp_loc, fp_off, memo->size) == fp_uc) {
+            fp_size = memo->size;
+        } else {
+            const u8* first = fp_uc;
+            memo = NULL;
+            fp_size = fp_uc ? rsx_fp_program_size(fp_uc, ENG_FP_MAX_BYTES) : 0;
+            if (fp_size) fp_uc = eng_guest_ptr(NULL, fp_loc, fp_off, fp_size);
+            if (!fp_uc) fp_size = 0;
+            if (fp_size && fp_uc == first && s_fp_memo_mode)
+                memo = eng_fp_memo_add(fp_uc, fp_size);
+        }
     }
 
     if (out_vp) *out_vp = vp_uc;
     if (out_vp_instrs) *out_vp_instrs = vp_instrs;
     if (out_fp) *out_fp = fp_uc;
     if (out_fp_size) *out_fp_size = fp_size;
+    if (out_memo) *out_memo = memo;
     return vp_instrs && fp_size;
 }
 
@@ -1714,6 +1832,26 @@ static u64 eng_fp_debug_hash(const u8* fp_uc, u32 fp_size)
         ? rsx_fp_structural_hash(fp_uc, fp_size, 1469598103934665603ull) : 0;
 }
 
+/* PORT_FP_MEMO=check: every memo hit against the SDK walks it replaces. */
+static void eng_fp_memo_check(const eng_fp_memo* m, const u8* uc, u32 size,
+                              const u8 gamma_masks[RSX_DSP_NUM_TEXTURES],
+                              const u8 expand_masks[RSX_DSP_NUM_TEXTURES],
+                              u32 sampled, u32 gamma, u32 expand)
+{
+    static u32 hits, bad;
+    const int ok = rsx_fp_program_size(uc, ENG_FP_MAX_BYTES) == size &&
+        rsx_fp_structural_hash(uc, size, 1469598103934665603ull) == m->hash &&
+        rsx_fp_texture_units(uc, size) == sampled &&
+        rsx_fp_texture_gamma_units(uc, size, gamma_masks) == gamma &&
+        rsx_fp_texture_expand_units(uc, size, expand_masks) == expand &&
+        rsx_fp_collect_constants(uc, size, &s_fp_memo_scratch) == (int)g.fp_constants.count &&
+        !memcmp(s_fp_memo_scratch.values, g.fp_constants.values, g.fp_constants.count * 16u);
+    if (!ok && bad++ < 16)
+        fprintf(stderr, "[fp-memo] MISMATCH program %016llx size %u\n", (unsigned long long)m->hash, size);
+    if (++hits % 100000u == 0)
+        fprintf(stderr, "[fp-memo] check: %u hits, %u mismatches\n", hits, bad);
+}
+
 static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
                             const rsx_be_render_state* rs,
                             rsx_be_format rt_fmt, u32 rt_count, int* out_fixed,
@@ -1725,8 +1863,9 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
     const u8* vp_uc = NULL;
     const u8* fp_uc = NULL;
     u32 vp_instrs = 0, fp_size = 0;
+    const eng_fp_memo* memo = NULL;
     /* No resident program pair means the built-in one; see kEngFixedVS. */
-    const int fixed = !eng_guest_programs(&vp_uc, &vp_instrs, &fp_uc, &fp_size);
+    const int fixed = !eng_guest_programs_ex(&vp_uc, &vp_instrs, &fp_uc, &fp_size, &memo);
 
     const u32 fp_ctrl  = rsx_dsp_shader_control(&g.rsx);
     const u32 srgb_output = !fixed && rsx_fp_srgb_output_enabled(
@@ -1737,7 +1876,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
     const u32 vtex_mask = eng_vtex_mask();
     rsx_fp_shadow_desc shadow[RSX_DSP_NUM_TEXTURES] = {{0}};
     u32 shadow_mask = 0;
-    const u32 sampled_units = fixed ? 0 : rsx_fp_texture_units(fp_uc, fp_size);
+    const u32 sampled_units = fixed ? 0 : memo ? memo->tex_units : rsx_fp_texture_units(fp_uc, fp_size);
     for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; u++) {
         if (!(sampled_units & (1u << u))) continue;
         rsx_dsp_texture t;
@@ -1756,7 +1895,8 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
         rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
         if (t.enabled) gamma_masks[u] = rsx_texture_gamma_mask(t.format, t.remap, t.filter, t.wrap);
     }
-    const u32 gamma_units = fixed ? 0 : rsx_fp_texture_gamma_units(fp_uc, fp_size, gamma_masks);
+    const u32 gamma_units = fixed ? 0 : memo ? memo->gamma_units & eng_unit_bits(gamma_masks)
+                                             : rsx_fp_texture_gamma_units(fp_uc, fp_size, gamma_masks);
     for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
         if (!(gamma_units & (1u << u))) gamma_masks[u] = 0;
     /* Texture sign expansion: SET_TEXTURE_ADDRESS's UNSIGNED_REMAP_BIASED
@@ -1767,7 +1907,8 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
         rsx_dsp_texture t; rsx_dsp_get_texture(&g.rsx, u, &t);
         if (t.enabled) expand_masks[u] = rsx_texture_expand_mask(t.format, t.remap, t.filter, t.wrap);
     }
-    const u32 expand_units = fixed ? 0 : rsx_fp_texture_expand_units(fp_uc, fp_size, expand_masks);
+    const u32 expand_units = fixed ? 0 : memo ? memo->expand_units & eng_unit_bits(expand_masks)
+                                              : rsx_fp_texture_expand_units(fp_uc, fp_size, expand_masks);
     for (u32 u = 0; u < RSX_DSP_NUM_TEXTURES; ++u)
         if (!(expand_units & (1u << u))) expand_masks[u] = 0;
 
@@ -1780,9 +1921,22 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
         if (!(unnorm_mask & (1u << u)))
             unnorm_dim[u][0] = unnorm_dim[u][1] = 0;
 
-    memset(&g.fp_constants, 0, sizeof g.fp_constants);
-    if (!fixed && rsx_fp_collect_constants(fp_uc, fp_size, &g.fp_constants) < 0)
+    /* Only the first count slots are ever read (sink_end, pipeline creation),
+     * so a memoised program fills just those instead of clearing 32 KB. */
+    if (fixed) {
+        g.fp_constants.count = 0;
+    } else if (memo) {
+        if (!memo->const_ok) return 0;
+        for (u32 i = 0; i < memo->n_const; i++)
+            for (u32 c = 0; c < 4; c++)
+                g.fp_constants.values[i][c] = rsx_fp_sanitize_constant_word(
+                    rsx_fp_read_word(fp_uc + memo->const_off[i] + c * 4u));
+        g.fp_constants.count = memo->n_const;
+    } else if (rsx_fp_collect_constants(fp_uc, fp_size, &g.fp_constants) < 0) {
         return 0;
+    }
+    if (memo && s_fp_memo_mode == 2) eng_fp_memo_check(memo, fp_uc, fp_size, gamma_masks, expand_masks,
+                                                       sampled_units, gamma_units, expand_units);
 
     /* Identity: the vertex program's own bytes, the fragment program's
      * STRUCTURE (its inline constants are hoisted into the buffered block, so
@@ -1795,8 +1949,12 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
         key = eng_fnv1a(&fixed_tag, sizeof fixed_tag, key);
     } else {
         key = eng_hash_words(vp_uc, vp_instrs * 16u, key);
-        key = rsx_fp_structural_hash(fp_uc, fp_size, key);
-        if (!key) return 0;
+        /* The program's own structural hash folded in, so a memoised one
+         * needs no walk. Pipeline keys only live for this run. */
+        const u64 fp_key = memo ? memo->hash
+                                : rsx_fp_structural_hash(fp_uc, fp_size, 1469598103934665603ull);
+        if (!fp_key) return 0;
+        key = eng_fnv1a(&fp_key, sizeof fp_key, key);
         const u32 fp_ctrl_key = fp_ctrl & 0x4Eu; /* colour width and fragment depth export */
         key = eng_fnv1a(&fp_ctrl_key, sizeof fp_ctrl_key, key);
         if (srgb_output) key = eng_fnv1a(&srgb_output, sizeof srgb_output, key);
@@ -1857,7 +2015,7 @@ static u32 eng_pipeline_get(const rsx_vertex_layout_plan* layout,
     if (vi > 0 && fi > 0)
         handle = g.be->pipeline_create(g.be->user, s_vs_hlsl, s_ps_hlsl, rs,
                                        layout, layout->stride, rt_fmt, rt_count);
-    const u64 fp_hash = fixed ? 0 : eng_fp_debug_hash(fp_uc, fp_size);
+    const u64 fp_hash = fixed ? 0 : memo ? memo->hash : eng_fp_debug_hash(fp_uc, fp_size);
     /* RSX_ENGINE_SHADER_DUMP=<existing dir>: each new pipeline's two programs
      * as <dir>/pipe<handle>.vs.hlsl and .ps.hlsl, the handle being the one
      * RSX_ENGINE_PASS_DUMP's index names, and a guest fragment program's own

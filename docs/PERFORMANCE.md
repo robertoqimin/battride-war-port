@@ -196,3 +196,11 @@ The game runs on wall-clock time (opening logos 20.2 s at 60 fps, 20.9 s with `P
 Adopted (Ryzen 5 4600H, GTX 1650; average fighting fps 48 -> 58, worst 5 s 45 -> 47): busy threads on physical cores of their own (`thread_affinity.c`), two colour targets per guest address (the shadow pass and the scene shared address 0 and recreated two images a frame), faster vertex remap/fetch and index reads, a word-wise vertex-program hash, and the guarded fast store for every translated store (`store_wrap.c`).
 
 Measured and rejected: GameMode (no change; amd-pstate already boosts), C runtime at `-O3`, 1 us timer slack, a shorter fence publication gap, inline fast memory in chunks 016/020, profiles retrained on fighting, and GCC 12.3 with its own profiles (58.2 against 58.4 fps).
+
+## The frame clock thread (2026-10-28)
+
+CPU samples of the `frame_clock` thread (FIFO walk, draw engine and Vulkan; about 68% of a core) in STG02 combat, by group: vertex fetch and decode ~22% (`rsx_vertex_decode_element` alone 11%), the FIFO walk and method dispatch ~21%, analysis of the guest fragment program ~12%, texture hashes and lookups ~11%, the NVIDIA driver ~6%. The executable is PIE: subtract its load address (from `/proc/<pid>/maps`) from the sampled addresses before looking them up with `nm`.
+
+`PORT_ENG_PROFILE=1` reads the clock several times per draw. When the kernel has fallen back to the HPET clock source (`/sys/devices/system/clocksource/clocksource0/current_clocksource`; it does so when it finds the TSC unstable at boot), those reads alone dropped combat to about 35 fps; use the sampler there instead.
+
+Fragment program memo (`rsx_engine_bridge.c`): every draw used to walk its fragment program five times (size, structural hash, sampled, gamma and expand units) and clear the 32 KB inline-constant block twice. A program is now analysed once per address and reused while its instruction blocks are unchanged; its inline constants are read again on every draw, since titles patch them in place. `PORT_FP_MEMO=0` turns it off; `PORT_FP_MEMO=check` recomputes every hit with the SDK functions (3.3 million hits, no mismatch, over boot, menus and combat). Three interleaved pairs: 58.3 against 57.0 fps, frames over 16.7 ms 1,696 against 2,782, p95 20.9 against 21.6 ms, worst five seconds 46.4 against 46.1 fps.
