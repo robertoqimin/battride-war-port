@@ -499,6 +499,27 @@ if(PORT_PPU_FAST_MEMORY AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU" AND NOT WI
             "-include" "${CMAKE_CURRENT_SOURCE_DIR}/include/port_ppu_memory.h")
     endforeach()
 endif()
+# Native replacements for hot translated functions (ppu_native.cpp). The
+# chunk that defines each is force-included with port_ppu_native.h, which
+# makes the lifted definition weak; a lift that put the function elsewhere
+# leaves the replacement off rather than failing to link.
+option(PORT_PPU_NATIVE "Native replacements for hot translated PPU functions" ON)
+set(PORT_PPU_NATIVE_CHUNK "029" CACHE STRING "Generated PPU chunk defining func_004B5120")
+if(PORT_PPU_NATIVE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU" AND NOT WIN32)
+    set(source "${RECOMP_DIR}/ppu_recomp_${PORT_PPU_NATIVE_CHUNK}.cpp")
+    set(native_defined "")
+    if(EXISTS "${source}")
+        file(STRINGS "${source}" native_defined REGEX "^void func_004B5120\\(ppu_context\\* ctx\\) {")
+    endif()
+    if(native_defined)
+        set_property(SOURCE "${source}" APPEND PROPERTY COMPILE_OPTIONS
+            "-include" "${CMAKE_CURRENT_SOURCE_DIR}/include/port_ppu_native.h")
+        target_sources(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/ppu_native.cpp")
+        message(STATUS "Native PPU:      func_004B5120 (chunk ${PORT_PPU_NATIVE_CHUNK})")
+    else()
+        message(STATUS "Native PPU:      off (func_004B5120 not in chunk ${PORT_PPU_NATIVE_CHUNK})")
+    endif()
+endif()
 # The same fast path for every other translated store, out of line: the
 # linker sends the chunks' vm_write8/16/32/64 calls to store_wrap.c.
 option(PORT_PPU_WRAP_STORES "Route translated stores through the fast path in store_wrap.c" ON)
