@@ -14,12 +14,13 @@ extern void spu_begin_image(int image_id);
 #define AUDIO_IMAGE_ID 506692475
 
 #ifdef PORT_AUDIO_LIFTED
-/* The task's code below its data tail and the MP3 codec it loads, translated
- * by scripts/lift_audio_spu.py: interpreted, the task filled about a third of
+/* The task's code below its data tail and the overlays it loads (the MP3
+ * codec, the module embedded in the executable), translated by
+ * scripts/lift_audio_spu.py: interpreted, the task filled about a third of
  * the cellAudio blocks in time. A translated function is run when the
- * interpreter reaches it, unless the script left it interpreted, and for the
- * codec only while local store holds the codec's instructions there (another
- * codec may be loaded at the same address). Its transfers are followed here;
+ * interpreter reaches it, unless the script left it interpreted, and for an
+ * overlay only while local store holds that overlay's instructions there
+ * (another one may be loaded at the same address). Its transfers are followed here;
  * anything else goes back to the interpreter. PORT_AUDIO_INTERPRET=1
  * interprets everything. */
 #define AUDIO_COUNT(a) (sizeof (a) / sizeof (a)[0])
@@ -32,7 +33,8 @@ static int audio_compiled_ok(const spu_context* ctx, uint32_t pc)
         return lo == AUDIO_COUNT(port_audio_interpret_only) || port_audio_interpret_only[lo] != pc;
     }
 #ifdef PORT_AUDIO_CODEC
-    if (pc >= PORT_AUDIO_CODEC_LO && pc < PORT_AUDIO_CODEC_HI) {
+    for (size_t r = 0; r < AUDIO_COUNT(port_audio_codec_ranges); r++) {
+        if (pc < port_audio_codec_ranges[r].lo || pc >= port_audio_codec_ranges[r].hi) continue;
         size_t lo = 0, hi = AUDIO_COUNT(port_audio_codec_entries);
         while (lo < hi) { size_t m = (lo + hi) / 2;
             if (port_audio_codec_entries[m].pc < pc) lo = m + 1; else hi = m; }
@@ -106,7 +108,7 @@ void port_register_spu(void)
     spu_begin_image(AUDIO_IMAGE_ID);
     spu_audio_spu_recomp_register();
 #ifdef PORT_AUDIO_CODEC
-    spu_mp3_spu_recomp_register();
+    port_audio_codec_register();
 #endif
     spu_begin_image(0);
 #endif
@@ -117,7 +119,7 @@ void port_register_spu(void)
 #ifdef PORT_AUDIO_LIFTED
     fprintf(stderr, "[port] SPU audio image registered: translated task%s, interpreter for the rest\n",
 #ifdef PORT_AUDIO_CODEC
-            " and MP3 codec"
+            " and overlays"
 #else
             ""
 #endif

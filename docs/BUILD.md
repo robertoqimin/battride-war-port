@@ -76,7 +76,7 @@ The script checks the SDK commit and ELF hash, analyzes the executable, generate
 
 PPU generation produces about 593 MiB of sources; also allow space for object files and the executable. On machines with limited RAM, reduce `--jobs` and build parallelism.
 
-SPU generation deliberately uses `--allow-partial`: of the two detected images, only `615f0131…dc0657` is registered statically. The rejected audio image is then translated by `scripts/lift_audio_spu.py` below its data tail (and its MP3 codec from the firmware, when present) into `spu/battride_audio/`; `spu_bridge.c` runs that code and interprets the rest. The generated registry is checked before installing the results. All generated results are ignored by Git.
+SPU generation deliberately uses `--allow-partial`: of the two detected images, only `615f0131…dc0657` is registered statically. The rejected audio image is then translated by `scripts/lift_audio_spu.py` below its data tail, with the SPU module it loads from the executable (and its MP3 codec from the firmware, when present), into `spu/battride_audio/`; `spu_bridge.c` runs that code and interprets the rest. The generated registry is checked before installing the results. All generated results are ignored by Git.
 
 A checkout generated before that script existed can add the audio translation in place, then reconfigure:
 

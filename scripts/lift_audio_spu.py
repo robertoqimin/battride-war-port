@@ -11,6 +11,9 @@ time; the sound broke up into short bursts. Two pieces of code do the work:
   at LS 0x1A880 byte for byte, with no relocation, and runs for most sound
   effects. It is translated from the builder's own copy, only when that copy
   is the one this was checked against, and the translation stays local.
+- a 10 KB SPU module embedded in the executable, which the task loads at LS
+  0x36F80 the same way. Some stages run it on every audio block (chapter 4,
+  stg08); interpreted, it took 29-39 ms a run and most blocks came too late.
 
 spu_bridge.c runs a translated function when the interpreter reaches one. A
 function stays interpreted when it could reach an indirect branch inside a
@@ -18,7 +21,7 @@ call: the runtime's general dispatcher would resolve that, and it ends the
 task on code it has no translation for. A codec function also runs only
 while local store still holds the codec's own instructions there.
 
-Writes <spu>/battride_audio/{task,mp3}/spu_recomp.[ch] and audio_task.h.
+Writes <spu>/battride_audio/{task,mp3,module}/spu_recomp.[ch] and audio_task.h.
 """
 import argparse
 import hashlib
@@ -35,16 +38,21 @@ MP3_SHA256 = 'adbd993483a41f53c994e080665fb5fbf36af783956d0e4ded30057b8b4e894a'
 MP3_BASE = 0x1A880             # where the task loads it (vaddr 0)
 MP3_TEXT = (0x80, 0xFF90)      # link addresses of its code segment
 MP3_TEXT_OFFSET = 0x100        # file offset of that segment
+MODULE_SHA256 = '615f01318fb1c02fbb03cd0fdca61b2144aaed4846bb2fc12fe4ca8fe2dc0657'
+MODULE_SIZE = 0x2A4C
+MODULE_BASE = 0x36F80
+MODULE_TEXT = (0x80, 0x2840)
+MODULE_TEXT_OFFSET = 0x80
 
 
-def find_task(elf: Path) -> bytes:
+def find_image(elf: Path, sha256: str, size: int, what: str) -> bytes:
     data = elf.read_bytes()
     pos = 0
     while (pos := data.find(b'\x7fELF\x01\x02\x01', pos + 1)) > 0:
-        blob = data[pos:pos + TASK_SIZE]
-        if hashlib.sha256(blob).hexdigest() == TASK_SHA256:
+        blob = data[pos:pos + size]
+        if hashlib.sha256(blob).hexdigest() == sha256:
             return blob
-    raise SystemExit(f'audio SPU task {TASK_SHA256[:16]}... not found in {elf}')
+    raise SystemExit(f'{what} {sha256[:16]}... not found in {elf}')
 
 
 def lift(sdk: Path, image: Path, out: Path, prefix: str, extra: list[str]) -> str:
@@ -109,7 +117,7 @@ def main() -> None:
     out.mkdir(parents=True)
 
     image = out / 'audio_task.elf'
-    image.write_bytes(find_task(args.elf))
+    image.write_bytes(find_image(args.elf, TASK_SHA256, TASK_SIZE, 'audio SPU task'))
     task_src = lift(args.sdk, image, out / 'task', 'spu_audio_', ['--code-end', hex(TASK_CODE_END)])
     image.unlink()      # game data; only the translation is needed
     if json.loads((out / 'task/report.json').read_text()).get('unsupported'):
@@ -124,32 +132,46 @@ def main() -> None:
              *(f'    0x{a:05X}u,' for a in task_keep), '};']
     summary = f'task: {len(task_keep)} entries left interpreted'
 
+    overlays = [('module', find_image(args.elf, MODULE_SHA256, MODULE_SIZE, 'audio SPU module'),
+                 MODULE_BASE, MODULE_TEXT, MODULE_TEXT_OFFSET)]
     codec = args.dev_flash / 'sys/external/flashMP3.pic' if args.dev_flash else None
     if codec and codec.is_file() and hashlib.sha256(codec.read_bytes()).hexdigest() == MP3_SHA256:
-        rebased = out / 'mp3.elf'
+        overlays.insert(0, ('mp3', codec.read_bytes(), MP3_BASE, MP3_TEXT, MP3_TEXT_OFFSET))
+    else:
+        summary += '; flashMP3.pic: not found or not the checked version, stays interpreted'
+
+    # Overlay entries run translated, each only while local store holds the
+    # instructions it was translated from (another overlay may sit there).
+    entries, ranges = [], []
+    for name, code, base, text, text_offset in overlays:
+        elf = out / f'{name}.elf'
+        elf.write_bytes(code)
+        rebased = out / f'{name}.rebased.elf'
         subprocess.run([sys.executable, str(args.sdk / 'tools/rebase_spu_elf.py'),
-                        str(codec), str(rebased), hex(MP3_BASE)], check=True)
-        mp3_src = lift(args.sdk, rebased, out / 'mp3', 'spu_mp3_', [])
+                        str(elf), str(rebased), hex(base)], check=True)
+        src = lift(args.sdk, rebased, out / name, f'spu_{name}_', [])
+        elf.unlink()
         rebased.unlink()
-        code = codec.read_bytes()
-        run, _ = compiled_entries(mp3_src, 'spu_mp3_')
-        lo, hi = MP3_BASE + MP3_TEXT[0], MP3_BASE + MP3_TEXT[1]
+        run, _ = compiled_entries(src, f'spu_{name}_')
+        lo, hi = base + text[0], base + text[1]
 
         def words(pc: int) -> str:
-            off = MP3_TEXT_OFFSET + pc - lo
+            off = text_offset + pc - lo
             return ', '.join(f'0x{int.from_bytes(code[off + 4 * i:off + 4 * i + 4], "big"):08X}u'
                              for i in range(4))
         run = [a for a in run if lo <= a and a + 16 <= hi]
-        lines += ['#define PORT_AUDIO_CODEC 1',
-                  f'#define PORT_AUDIO_CODEC_LO 0x{lo:X}u',
-                  f'#define PORT_AUDIO_CODEC_HI 0x{hi:X}u',
-                  'void spu_mp3_spu_recomp_register(void);',
-                  '/* Codec entries run translated, with the instructions expected there (sorted). */',
-                  'static const struct { uint32_t pc, w[4]; } port_audio_codec_entries[] = {',
-                  *(f'    {{ 0x{a:05X}u, {{ {words(a)} }} }},' for a in run), '};']
-        summary += f'; flashMP3.pic: {len(run)} entries translated'
-    else:
-        summary += '; flashMP3.pic: not found or not the checked version, stays interpreted'
+        entries += [f'    {{ 0x{a:05X}u, {{ {words(a)} }} }},' for a in run]
+        ranges.append(f'    {{ 0x{lo:05X}u, 0x{hi:05X}u }},')
+        lines.append(f'void spu_{name}_spu_recomp_register(void);')
+        summary += f'; {name}: {len(run)} entries translated'
+    lines += ['#define PORT_AUDIO_CODEC 1',
+              '/* Local-store ranges of the translated overlays. */',
+              'static const struct { uint32_t lo, hi; } port_audio_codec_ranges[] = {', *ranges, '};',
+              '/* Overlay entries run translated, with the instructions expected there (sorted). */',
+              'static const struct { uint32_t pc, w[4]; } port_audio_codec_entries[] = {',
+              *sorted(entries), '};',
+              'static void port_audio_codec_register(void)', '{',
+              *(f'    spu_{name}_spu_recomp_register();' for name, *_ in overlays), '}']
     (out / 'audio_task.h').write_text('\n'.join(lines) + '\n')
     print('audio SPU ' + summary)
 

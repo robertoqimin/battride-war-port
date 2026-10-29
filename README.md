@@ -15,7 +15,7 @@ The project was called **Battride War Port** (repository `battride-war-port`) un
 What works in the tested parts:
 
 - **Graphics:** scenery, characters with animation, enemies, HUD, special-attack effects and character shadows, which fall from the characters' feet. Shadows, lighting and effects in the opening cutscene and STG02 were compared with footage of the original game and match.
-- **Audio:** music, voices and effects, with the game's audio SPU task and its MP3 codec translated to native code.
+- **Audio:** music, voices and effects, with the game's audio SPU task, the module it loads and its MP3 codec translated to native code.
 - **Saves and data:** game data installation and saves; 21,107 installed files matched the disc byte for byte.
 - **Movies:** PAMF playback through `cellSail`.
 - **Input:** controllers through SDL2, and keyboard and mouse (see [Controls](#controls)); both can be used together.

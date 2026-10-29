@@ -280,8 +280,9 @@ elseif(PORT_ENABLE_SPU)
              "${PS3RECOMP_DIR}/runtime/spu/spu_dispatch_mt.c")
         # Generated beside the lift; each is present only once its generator
         # has been run, so each is included only if it is actually here.
-        # The audio task's code below its data tail and, when the firmware was
-        # available, its MP3 codec (scripts/lift_audio_spu.py); spu_bridge.c
+        # The audio task's code below its data tail, the module it loads and,
+        # when the firmware was available, its MP3 codec
+        # (scripts/lift_audio_spu.py); spu_bridge.c
         # falls back to pure interpretation without them.
         if(EXISTS "${SPU_DIR}/battride_audio/task/spu_recomp.c")
             list(APPEND SPU_SOURCES "${SPU_DIR}/battride_audio/task/spu_recomp.c")
@@ -289,6 +290,10 @@ elseif(PORT_ENABLE_SPU)
             if(EXISTS "${SPU_DIR}/battride_audio/mp3/spu_recomp.c")
                 list(APPEND SPU_SOURCES "${SPU_DIR}/battride_audio/mp3/spu_recomp.c")
                 message(STATUS "  audio SPU MP3 codec: translated from the local firmware")
+            endif()
+            if(EXISTS "${SPU_DIR}/battride_audio/module/spu_recomp.c")
+                list(APPEND SPU_SOURCES "${SPU_DIR}/battride_audio/module/spu_recomp.c")
+                message(STATUS "  audio SPU module: translated")
             endif()
         else()
             message(STATUS "  (no battride_audio -- audio SPU task fully interpreted)")
