@@ -1,0 +1,74 @@
+SPU helpers: SSE4.1 paths for rotqby, rotqbyi, shlqbyi and cwd
+
+On x86 these four had no vector path (only NEON did) and compiled to
+byte loops. The audio SPU module of the chapter 4 stage (stg08) uses
+them heavily: translated, it still left 2-20% of the cellAudio blocks
+late. With pshufb versions the hottest function went from 11037 to 8244
+instructions and the stage to 0.2% underruns (docs/ISSUES.md item 19).
+Exhaustively checked against the _ref versions with gcc and clang.
+
+Applies to ps3recomp a6d76c895f77eb30b90a806c830544e61821b77f.
+
+diff --git a/runtime/spu/spu_helpers.h b/runtime/spu/spu_helpers.h
+index 3f7d733..1ad89b7 100644
+--- a/runtime/spu/spu_helpers.h
++++ b/runtime/spu/spu_helpers.h
+@@ -466,6 +466,21 @@ static inline u128 spu_shlqbyi_ref(u128 a, int sh) { u128 r=spu_zero(); sh&=0x1F
+ static inline u128 spu_shlqbyi(u128 a, int sh) {
+     return spu__perm(a, vaddq_u8(spu__iota(), vdupq_n_u8((uint8_t)(sh & 0x1F))));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++/* pshufb with a computed index, like the NEON paths: SPU byte P lives at
++ * host byte P ^ 3. The byte loops were ~a quarter of the instructions of a
++ * DSP-heavy audio task. Indices with the top bit set give zero. */
++static inline __m128i spu__x_iota3(void) { return _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12); }
++static inline u128 spu__x_perm(u128 a, __m128i spu_src) {
++    __m128i A; memcpy(&A, &a, 16);
++    const __m128i idx = _mm_or_si128(_mm_xor_si128(spu_src, _mm_set1_epi8(3)),
++                                     _mm_cmpgt_epi8(spu_src, _mm_set1_epi8(15)));
++    A = _mm_shuffle_epi8(A, idx);
++    u128 r; memcpy(&r, &A, 16); return r;
++}
++static inline u128 spu_shlqbyi(u128 a, int sh) {
++    return spu__x_perm(a, _mm_add_epi8(spu__x_iota3(), _mm_set1_epi8((char)(sh & 0x1F))));
++}
+ #else
+ static inline u128 spu_shlqbyi(u128 a, int sh) { return spu_shlqbyi_ref(a, sh); }
+ #endif
+@@ -474,6 +489,10 @@ static inline u128 spu_rotqbyi_ref(u128 a, int sh) { u128 r; sh&=0x0F; for(int i
+ static inline u128 spu_rotqbyi(u128 a, int sh) {
+     return spu__perm(a, vandq_u8(vaddq_u8(spu__iota(), vdupq_n_u8((uint8_t)sh)), vdupq_n_u8(15)));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_rotqbyi(u128 a, int sh) {
++    return spu__x_perm(a, _mm_and_si128(_mm_add_epi8(spu__x_iota3(), _mm_set1_epi8((char)sh)), _mm_set1_epi8(15)));
++}
+ #else
+ static inline u128 spu_rotqbyi(u128 a, int sh) { return spu_rotqbyi_ref(a, sh); }
+ #endif
+@@ -1187,6 +1206,10 @@ static inline u128 spu_rotqby_ref(u128 a, u128 b){ int sh=b._u32[0]&0x0F; u128 r
+ static inline u128 spu_rotqby(u128 a, u128 b) {
+     return spu__perm(a, vandq_u8(vaddq_u8(spu__iota(), vdupq_n_u8((uint8_t)b._u32[0])), vdupq_n_u8(15)));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_rotqby(u128 a, u128 b) {
++    return spu__x_perm(a, _mm_and_si128(_mm_add_epi8(spu__x_iota3(), _mm_set1_epi8((char)b._u32[0])), _mm_set1_epi8(15)));
++}
+ #else
+ static inline u128 spu_rotqby(u128 a, u128 b) { return spu_rotqby_ref(a, b); }
+ #endif
+@@ -1417,6 +1440,14 @@ static inline u128 spu_cwd(u128 a, int i7) {
+     uint32x4_t m = vceqq_u32(vld1q_u32(lane), vdupq_n_u32((((uint32_t)a._u32[0] + (uint32_t)i7) >> 2) & 3));
+     return spu__st(vbslq_u32(m, vdupq_n_u32(0x00010203u), vld1q_u32(base)));
+ }
++#elif defined(__SSE4_1__) && !defined(SPU_SCALAR_HELPERS) && !defined(SPU_SCALAR_INT)
++static inline u128 spu_cwd(u128 a, int i7) {
++    const __m128i m = _mm_cmpeq_epi32(_mm_setr_epi32(0, 1, 2, 3),
++                                      _mm_set1_epi32((int)((((uint32_t)a._u32[0] + (uint32_t)i7) >> 2) & 3)));
++    const __m128i r = _mm_blendv_epi8(_mm_setr_epi32(0x10111213, 0x14151617, 0x18191A1B, 0x1C1D1E1F),
++                                      _mm_set1_epi32(0x00010203), m);
++    u128 out; memcpy(&out, &r, 16); return out;
++}
+ #else
+ static inline u128 spu_cwd(u128 a, int i7) { return spu_cwd_ref(a, i7); }
+ #endif

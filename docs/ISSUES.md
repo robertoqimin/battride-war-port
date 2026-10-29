@@ -20,7 +20,7 @@ Levantamento de tudo o que foi reportado até 25/10/2026, com a situação atual
 | 10 | Quadros pesados limitados pela montagem de comandos do jogo | Desempenho | Em aberto (pior trecho de 5 s ~47 fps; meta de 60) |
 | 11 | Áudio depende do firmware local | Áudio | Limitação conhecida |
 | 12 | Codec ATRAC não exercitado | Áudio | Não usado em nenhum capítulo testado |
-| 19 | Áudio quebra na missão do capítulo 4 (STG08) | Áudio | Corrigido (depende de mudança no SDK) |
+| 19 | Áudio quebra na missão do capítulo 4 (STG08) | Áudio | Corrigido (com patch no SDK) |
 | 20 | Aviso do motor de som com 176566 Hz | Áudio | Em análise |
 | 13 | Encerramento limpo não validado em todos os caminhos | Estabilidade | Em aberto |
 | 14 | Processos de teste remanescentes contaminaram medições | Ferramentas de teste | Contornado |
@@ -124,7 +124,7 @@ A tradução do codec MP3 só é gerada se o `flashMP3.pic` local tiver o SHA-25
 ### 12. Codec ATRAC — Não usado nas fases testadas
 O jogo não abriu o `flashATRAC.pic` nos testes, nem na sessão de 29/10/2026 que passou pelos 10 capítulos. Todas as músicas (`sound/BGM/BGM/*.msf`) são MPEG estéreo; se o ATRAC for usado em algum lugar, roda interpretado e pode ter cortes.
 
-### 19. Áudio quebra na missão do capítulo 4 (STG08) — Corrigido (depende de mudança no SDK)
+### 19. Áudio quebra na missão do capítulo 4 (STG08) — Corrigido (com patch no SDK)
 - **Sintoma (29/10/2026):** na primeira missão do Chronicle 4章 ("近くて遠い", fase `stg08.gtc`), 60-75% dos blocos de áudio chegam vazios do começo ao fim da missão (`PORT_AUDIO_STATS`: ~680 underruns de 938 por linha), começando já em `MIS_ENTER.msf`. Em todas as outras fases testadas ficam abaixo de 0,4%.
 - **Não é a música:** `MIS_EVENT_BATTLE_BOSS.msf`, que toca nessa missão, também tocou na missão final sem cortes.
 - **Pista:** no log, cada execução da tarefa de áudio do SPU (`[spu_workload] WAIT_SIGNAL ... ran=`) leva 29-39 ms durante essa missão, contra 0-6 ms no resto da sessão.
@@ -133,7 +133,7 @@ O jogo não abriu o `flashATRAC.pic` nos testes, nem na sessão de 29/10/2026 qu
   - `scripts/lift_audio_spu.py` traduz também esse módulo (72 funções, nenhuma instrução sem suporte), como já fazia com o `flashMP3.pic`; `spu_bridge.c` aceita várias sobreposições. Sozinho, isso baixou as falhas para 2-20%: o código traduzido do módulo virou ~46% do tempo da thread de áudio.
   - No SDK (`runtime/spu/spu_helpers.h`), `rotqby`, `rotqbyi`, `shlqbyi` e `cwd` não tinham caminho vetorial em x86 (só em NEON) e viravam laços byte a byte. Com versões SSE4.1 (`pshufb`), idênticas à referência em teste exaustivo com gcc e clang, a função mais quente do módulo caiu de 11037 para 8244 instruções.
 - **Resultado (build PGO, 29/10/2026):** na mesma missão, 0,2% de underruns no combate da primeira fase e 0 em 3 minutos da segunda; a missão final continua limpa (8 de 26264). O chefe dessa missão não foi alcançado pelo piloto automático.
-- **Pendente:** a mudança no SDK está só na cópia local de `../ps3recomp`; o AppImage empacota a revisão fixada em `recompile.json`, então ela precisa entrar no SDK (e a revisão ser atualizada) para chegar aos jogadores.
+- **SDK:** a mudança fica em `patches/ps3recomp/0001-spu-helpers-sse41-byte-rotates.patch`, aplicada sobre a revisão fixada em `recompile.json` pelo `scripts/build_appimage.py` e, em builds locais, à mão (`docs/BUILD.md`); o CMake para se ela faltar.
 
 ### 20. Aviso do motor de som com 176566 Hz — Em análise
 - O motor de som do jogo escreveu 4 vezes `SCREAM: Error! Sound buffer size is too small for this playback frequency (176566 Hz)` na missão final, logo depois de abrir a fala `VOICE/SKL/SKL_050.msf` (Skull). 176566 Hz é ~3,7× 48 kHz; não se sabe se é um tom alterado legítimo do jogo ou uma frequência calculada errado no port. Ainda não foi comparado com o jogo original.

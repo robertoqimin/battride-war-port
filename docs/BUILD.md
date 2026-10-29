@@ -32,12 +32,13 @@ Run these commands in the workspace directory to create a fresh SDK checkout:
 git clone https://github.com/sp00nznet/ps3recomp.git
 cd ps3recomp
 git checkout --detach a6d76c895f77eb30b90a806c830544e61821b77f
+git apply ../kamenriderbattridewarsport/patches/ps3recomp/*.patch
 python3 -m venv .venv
 .venv/bin/python -m pip install -r tools/requirements.txt
 cd ../kamenriderbattridewarsport
 ```
 
-If the SDK already exists, do not clone over or replace its directory: check the commit and preserve local changes. The local `*_bridge.*` files depend on this revision's interfaces. Updating the SDK requires renewed validation.
+If the SDK already exists, do not clone over or replace its directory: check the commit and preserve local changes. The patches in `patches/ps3recomp/` are the port's fixes to that commit (the AppImage applies them to its SDK copy too); CMake stops if they are missing. The local `*_bridge.*` files depend on this revision's interfaces. Updating the SDK requires renewed validation.
 
 ## 2. Prepare local data
 

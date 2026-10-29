@@ -41,6 +41,14 @@ set(RECOMP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/recomp" CACHE PATH
 get_filename_component(RECOMP_DIR "${RECOMP_DIR}" ABSOLUTE)
 
 message(STATUS "ps3recomp SDK:   ${PS3RECOMP_DIR}")
+# The port's fixes to the pinned SDK (patches/ps3recomp/, applied by
+# docs/BUILD.md and scripts/build_appimage.py). Without them the build would
+# work but the chapter 4 stage's audio breaks up, so refuse to build.
+file(STRINGS "${PS3RECOMP_DIR}/runtime/spu/spu_helpers.h" _port_sdk_patched LIMIT_COUNT 1 REGEX "spu__x_perm")
+if(NOT _port_sdk_patched)
+    message(FATAL_ERROR "The SDK at ${PS3RECOMP_DIR} lacks patches/ps3recomp/0001-spu-helpers-sse41-byte-rotates.patch; "
+                        "apply it with: git -C ${PS3RECOMP_DIR} apply ${CMAKE_CURRENT_SOURCE_DIR}/patches/ps3recomp/*.patch")
+endif()
 message(STATUS "Lifted output:   ${RECOMP_DIR}")
 
 if(NOT EXISTS "${RECOMP_DIR}/ppu_recomp.h")

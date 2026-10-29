@@ -76,6 +76,11 @@ sdk=(args.sdk or P.parent/'ps3recomp').resolve()
 archive=subprocess.run(['git','-C',str(sdk),'archive','--format=tar',spec['sdk_commit']],check=True,capture_output=True).stdout
 with tarfile.open(fileobj=io.BytesIO(archive)) as tar:tar.extractall(S/'usr/share/battride/ps3recomp')
 (S/'usr/share/battride/ps3recomp/.ps3recomp-commit').write_text(spec['sdk_commit']+'\n')
+# The port's own fixes to that commit (patches/ps3recomp/), in order. The
+# ceiling keeps git from treating the export as part of an enclosing checkout.
+for patch in sorted((P/'patches/ps3recomp').glob('*.patch')):
+    subprocess.run(['git','apply',str(patch)],cwd=S/'usr/share/battride/ps3recomp',check=True,
+                   env={**os.environ,'GIT_CEILING_DIRECTORIES':str((S/'usr/share/battride').resolve())})
 print('Assembling the compiler toolchain...',flush=True)
 appimage_toolchain.assemble(S/'usr/toolchain')
 # Optional GCC profiles: execution counts of the translated code, which the

@@ -33,6 +33,7 @@ run-vulkan.sh
 sail_audio.hpp
 sail_bridge.cpp
 sail_decoder.hpp
+patches/ps3recomp/0001-spu-helpers-sse41-byte-rotates.patch
 scripts/export_source.py
 scripts/frame_report.py
 scripts/generate.py
