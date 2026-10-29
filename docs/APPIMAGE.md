@@ -7,11 +7,11 @@ The AppImage contains **no game code or assets**. It includes GCC optimization p
 Make the AppImage executable and open it:
 
 ```sh
-chmod +x BattrideWarRecomp-v0.5.1-x86_64.AppImage
-./BattrideWarRecomp-v0.5.1-x86_64.AppImage
+chmod +x BattrideWarRecomp-v0.5.2-x86_64.AppImage
+./BattrideWarRecomp-v0.5.2-x86_64.AppImage
 ```
 
-If FUSE is unavailable, run `./BattrideWarRecomp-v0.5.1-x86_64.AppImage --appimage-extract-and-run`.
+If FUSE is unavailable, run `./BattrideWarRecomp-v0.5.2-x86_64.AppImage --appimage-extract-and-run`.
 
 Select the Japan BLJS10220 ISO and click **Import ISO & Play**. The first launch:
 
@@ -29,8 +29,8 @@ On laptops with two GPUs the game picks the discrete one. If it picks the wrong 
 Headless checks:
 
 ```sh
-./BattrideWarRecomp-v0.5.1-x86_64.AppImage --check    # helpers and build tools start
-./BattrideWarRecomp-v0.5.1-x86_64.AppImage --import-only /path/game.iso --data-dir /new/empty/data   # import and build
+./BattrideWarRecomp-v0.5.2-x86_64.AppImage --check    # helpers and build tools start
+./BattrideWarRecomp-v0.5.2-x86_64.AppImage --import-only /path/game.iso --data-dir /new/empty/data   # import and build
 ```
 
 ## Build the AppImage
@@ -44,12 +44,12 @@ podman run --rm --userns=keep-id --security-opt label=disable \
   -v "$G:$G" -v /path/inputs:/path/inputs:ro -w "$PWD" battride-build:ubuntu22.04 \
   python3 scripts/build_appimage.py \
     --runtime /path/inputs/runtime-x86_64 \
-    --sevenzip-dir /path/inputs/7zip-linux --stage build-appimage/v0.5.1/AppDir \
-    --pgo build-pgo11/pgo --output dist/BattrideWarRecomp-v0.5.1-x86_64.AppImage
+    --sevenzip-dir /path/inputs/7zip-linux --stage build-appimage/v0.5.2/AppDir \
+    --pgo build-pgo11/pgo --output dist/BattrideWarRecomp-v0.5.2-x86_64.AppImage
 # Corresponding source for the release page (runs as container root; needs network):
 podman run --rm --security-opt label=disable -v "$G:$G" -w "$PWD" battride-build:ubuntu22.04 \
-  python3 scripts/collect_sources.py --stage build-appimage/v0.5.1/AppDir \
-    --out dist/BattrideWarRecomp-v0.5.1-sources.tar --runtime-commit <type2-runtime commit>
+  python3 scripts/collect_sources.py --stage build-appimage/v0.5.2/AppDir \
+    --out dist/BattrideWarRecomp-v0.5.2-sources.tar --runtime-commit <type2-runtime commit>
 ```
 
 `--pgo` takes GCC profiles trained with the AppImage's own compiler (see "Optimization profiles"); without it the AppImage builds the game without them.
@@ -76,6 +76,10 @@ The runner is linked with `PORT_PORTABLE=ON`, which hides the static shader-tool
 Nothing in the AppImage uses `LD_LIBRARY_PATH`. It would leak the bundled libraries into host programs started from it: ninja runs every command through `/bin/sh`, which on Arch-based systems is bash linked against the host's newer readline, and the bundled Ubuntu readline broke it. Instead, `patchelf` gives each bundled executable a relative DT_RPATH (inherited by the libraries it loads), the toolchain's tools point at `usr/toolchain/runtime/`, and libraries with their own RUNPATH (LLVM, libpulse) are rewritten the same way.
 
 The builder refuses existing stage/output paths. It never bundles libc, the dynamic loader, the C++ runtime, the GL/Vulkan loaders, DRM/GBM/LLVM, or the core X11/xcb/Wayland libraries that Mesa and NVIDIA link; those come from the host so they match its GPU driver. Toolkit helpers that are not on every host (GTK 4 and libadwaita, the librsvg icon loader, SDL2, xcb-util, xkbcommon) are bundled. RPCS3 runs through its own `AppRun`, which uses RPCS3's `checkrt` C++ runtime on hosts older than it needs. Unresolved imports seen at build time are listed in `app/unresolved-build-libraries.txt` (none are expected). Dependency paths are recorded in `app/library-sources.json`; component hashes are in `app/package.json`. Build-image package documentation (including the toolchain's licenses) is retained, and `app/CREDITS.md` is shown by the launcher's **Credits & licenses** button.
+
+## Chapter 4 audio in 0.5.2
+
+In the first mission of Chronicle chapter 4 (stage `stg08`) the sound broke up from start to end: about 72% of the audio blocks came too late. The audio task loads a small SPU module from the game's executable there and runs it on every block; it was interpreted. The module is now translated like the rest of the task, and `patches/ps3recomp/` makes four SPU byte operations use SSE4.1 on x86 instead of byte loops (the AppImage applies it to its SDK copy). The mission now loses about 0.2% of the blocks in combat, like the other stages ([ISSUES.md](ISSUES.md) item 19). The game is rebuilt once on first launch.
 
 ## Window on recent Mesa in 0.5.1
 
