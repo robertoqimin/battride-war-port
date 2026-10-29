@@ -20,6 +20,7 @@ fsr1_spv.h
 gcm_bridge.c
 include/port_ppu_memory.h
 include/port_ppu_native.h
+include/port_ppu_store_gate.h
 include/ppu_vmx.h
 input_bridge.c
 loader_bridge.cpp

@@ -12,6 +12,7 @@ fi
 "${CC:-clang}" -std=c17 -O2 "${includes[@]}" "${checks[@]}" \
     "-DPORT_SPU_COHERENCY_SOURCE=\"$sdk/runtime/spu/spu_coherency.c\"" \
     -c "$root/spu_coherency_bridge.c" -o "$work/coherency.o"
+"${CC:-clang}" -std=c17 -O2 "${checks[@]}" -c "$root/store_wrap.c" -o "$work/store_wrap.o"
 "${CXX:-g++}" -std=c++20 -O2 -fno-strict-aliasing "${includes[@]}" "${checks[@]}" \
-    "$root/tests/test_ppu_memory.cpp" "$work/coherency.o" -o "$work/test"
+    "$root/tests/test_ppu_memory.cpp" "$work/coherency.o" "$work/store_wrap.o" -o "$work/test"
 ASAN_OPTIONS=detect_leaks=0 "$work/test"

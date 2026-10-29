@@ -94,6 +94,7 @@ extern int32_t g_sys_process_exit_code;
 /* Host-provided symbols the runtime and the HLE libraries link against. */
 uint8_t* vm_base = nullptr;
 extern uint32_t ppu_vm_size;                  /* ppu_loader.cpp: the OOB guard */
+void port_ppu_store_gate_update(void);        /* loader_bridge.cpp: after ppu_vm_size */
 
 /* Guest-callback dispatch. g_ps3_guest_caller is the hook the HLE runtime
  * calls back into recompiled code through -- cellSysutil events and the GCM
@@ -454,6 +455,7 @@ static bool alloc_guest_vm(void)
     vm_base = (p == MAP_FAILED) ? nullptr : (uint8_t*)p;
     ppu_vm_size = 0xE0000000u;
 #endif
+    port_ppu_store_gate_update();
     return vm_base != nullptr;
 }
 

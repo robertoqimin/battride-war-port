@@ -35,6 +35,7 @@
 #include "ppu_tls.h"   /* PPU_THREAD_LOCAL, without a second ppu_context */
 #define PPU_NO_INLINE_LOADS   /* this file defines the out-of-line accessors */
 #include "ppu_recomp.h"
+#include "port_ppu_store_gate.h"
 #include "ps3emu/ps3_ftrace.h"   /* PS3_FTRACE timeline */
 #include "ps3emu/milestone.h"   /* ps3_ms / ps3_msf -- boot milestone log */     /* ppu_context, func decls, ppu_recomp_register */
 #include "../memory/vm.h"   /* vm_commit -- sys_mmapper_search_and_map maps for real */
@@ -1308,6 +1309,7 @@ static inline int vm_oob(uint32_t a, uint32_t n)
 extern "C" PPU_THREAD_LOCAL ppu_context* g_active_ctx;
 extern "C" void ppu_dump_guest_stack(ppu_context*, const char*);
 extern "C" uint32_t g_null_sweep_hi = 0;   /* 0 = not sweeping */
+extern "C" void port_ppu_store_gate_update(void);
 static uint32_t g_null_sweep_last = 0;
 static unsigned g_null_sweep_tid = 0;
 static int vm_null_store_report(uint32_t a, uint32_t v, int width, void* ra)
@@ -1320,7 +1322,8 @@ static int vm_null_store_report(uint32_t a, uint32_t v, int width, void* ra)
       if (sweep < 0) { const char* e = getenv("PS3_NULL_SWEEP"); sweep = e ? 1 : 0; }
       if (sweep) { g_null_sweep_hi = 1; g_null_sweep_last = a;
                    g_null_sweep_tid = g_active_ctx
-                                    ? (unsigned)g_active_ctx->thread_id : 0u; } }
+                                    ? (unsigned)g_active_ctx->thread_id : 0u;
+                   port_ppu_store_gate_update(); } }
     { static long n = 0;
       enum { NW_MAX = 8 };
       long i = n++;
@@ -1380,6 +1383,7 @@ static int vm_null_sweep(uint32_t a)
         return 1;                       /* still the same sweep: drop */
     }
     g_null_sweep_hi = 0;                /* pattern broken: it is over */
+    port_ppu_store_gate_update();
     { static int said = 0;
       if (!said) { said = 1;
           fprintf(stderr, "[null-write] sweep contained, ended at 0x%08X\n",
@@ -1482,6 +1486,11 @@ extern "C" {
 const unsigned char* port_ppu_coh_bits = s_coh_bits;
 const int* port_ppu_coh_on = s_coh_on;
 int port_ppu_store_inline_ok = 0;
+uint32_t port_ppu_store_end = 0x10000u;   /* every store slow until computed */
+void port_ppu_store_gate_update(void)
+{
+    port_ppu_store_end = port_ppu_store_end_for(port_ppu_store_inline_ok, g_null_sweep_hi, ppu_vm_size);
+}
 }
 static struct PortStoreInlineInit {
     PortStoreInlineInit() {
@@ -1489,6 +1498,7 @@ static struct PortStoreInlineInit {
         port_ppu_store_inline_ok = !(getenv("PPU_WVAL") || getenv("PPU_WWATCH") ||
                                     getenv("PT") || getenv("PORT_PPU_MEMORY_SLOW"));
 #endif
+        port_ppu_store_gate_update();
     }
 } s_port_store_inline_init;
 
