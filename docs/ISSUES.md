@@ -15,11 +15,13 @@ Levantamento de tudo o que foi reportado até 25/10/2026, com a situação atual
 | 17 | Sombras incorretas | Gráficos | Resolvido na primeira missão |
 | 18 | Sombras em posição errada durante o gameplay | Gráficos | Resolvido na primeira missão |
 | 7 | Conclusão de missões | Gameplay | Validado na primeira missão (teste manual) |
-| 8 | Jogo completo não validado | Gameplay | Em aberto |
-| 9 | Estabilidade prolongada | Estabilidade | Parcial (~30 min sem falhas) |
+| 8 | Jogo completo não validado | Gameplay | Parcial: todos os 10 capítulos carregam e rodam; conclusão só validada na STG02 |
+| 9 | Estabilidade prolongada | Estabilidade | Parcial (~70 min e ~25 carregamentos de fase sem falhas) |
 | 10 | Quadros pesados limitados pela montagem de comandos do jogo | Desempenho | Em aberto (pior trecho de 5 s ~47 fps; meta de 60) |
 | 11 | Áudio depende do firmware local | Áudio | Limitação conhecida |
-| 12 | Codec ATRAC não exercitado | Áudio | Não testado |
+| 12 | Codec ATRAC não exercitado | Áudio | Não usado em nenhum capítulo testado |
+| 19 | Áudio quebra na missão do capítulo 4 (STG08) | Áudio | Corrigido (depende de mudança no SDK) |
+| 20 | Aviso do motor de som com 176566 Hz | Áudio | Em análise |
 | 13 | Encerramento limpo não validado em todos os caminhos | Estabilidade | Em aberto |
 | 14 | Processos de teste remanescentes contaminaram medições | Ferramentas de teste | Contornado |
 | 15 | Toques curtos do `PAD_FILE` perdidos com o jogo mais rápido | Ferramentas de teste | Contornado |
@@ -82,8 +84,25 @@ Levantamento de tudo o que foi reportado até 25/10/2026, com a situação atual
 - **Tentativa automatizada anterior:** numa sessão automatizada de ~30 min na STG02, foram 350 inimigos derrotados e combo máximo de 50, mas o objetivo ficou em "先へ進め" (avance) até o tempo da missão (30 min) acabar.
 - **Conclusão:** o teste manual mostrou que a falha era do piloto automático, não do port.
 
-### 8. Jogo completo — Em aberto
-Só a primeira missão foi concluída; as demais não foram testadas.
+### 8. Jogo completo — Parcial
+- **Teste (29/10/2026):** com um save do RPCS3 que tem o modo história inteiro concluído (todos os modos do menu destravados), a primeira missão de cada um dos 10 capítulos do Chronicle foi aberta e jogada pelo piloto automático (`PAD_FILE`/`PORT_PAD_STICK_FILE`, 1,5 a 8 min cada), numa única sessão de ~70 min, com a janela aberta.
+- **Resultado:**
+
+| Capítulo | Fase | Resultado |
+|---|---|---|
+| Prólogo | STG02 | Carrega e roda; cena do holofote e combate normais |
+| 英雄の目覚め (1) | STG02 | Carrega e roda |
+| 英雄の目覚め (2) | STG09 | Carrega e roda |
+| 英雄の目覚め (3) | STG03 | Carrega e roda; missão de moto com tempo: o piloto automático não termina a tempo e o jogo mostra "Mission Failed" e a tela de resultado normalmente |
+| Chronicle 1章 | STG05 | Carrega e roda |
+| Chronicle 2章 | STG11 | Carrega e roda; pilotagem da moto normal |
+| Chronicle 3章 | STG10 | Carrega e roda |
+| Chronicle 4章 | STG08 | Carrega e roda; **áudio quebra a missão inteira** (item 19) |
+| Chronicle 5章 | STG12 | Carrega e roda |
+| Capítulo final | STG19 | Carrega e roda 8 min: lutas contra Decade e Skull, troca de formas, especiais; o W foi derrotado e o jogo foi para o resultado e "tentar de novo" normalmente |
+
+- Nenhum travamento ou erro do port no log; média de 55 fps na sessão inteira (59,4 fps nos 8 min da missão final).
+- **Falta:** concluir as missões (o piloto automático não termina missões; ver item 7), as demais ~20 missões dos capítulos, o final e os créditos (`MEN_ENDING.msf`, `MEN_STAFFROLL.msf`), Rider Road, Free Mission e Galeria. Isso exige jogar manualmente.
 
 ### 9. Estabilidade prolongada — Parcial
 Houve ~30 min de missão contínua sem travamento e sem erros no log, até o limite de tempo do script de teste. Sessões mais longas, troca de fases e carregamentos repetidos não foram testados.
@@ -102,8 +121,22 @@ Houve ~30 min de missão contínua sem travamento e sem erros no log, até o lim
 ### 11. Áudio depende do firmware local — Limitação conhecida
 A tradução do codec MP3 só é gerada se o `flashMP3.pic` local tiver o SHA-256 verificado. Sem ele, o codec fica interpretado e o combate provavelmente volta a ter cortes. Sem nenhum codec, a tarefa de áudio para (ver `README_FIRMWARE.md`).
 
-### 12. Codec ATRAC — Não testado
-O jogo não abriu o `flashATRAC.pic` nos testes. Se for usado em outras fases, roda interpretado e pode ter cortes.
+### 12. Codec ATRAC — Não usado nas fases testadas
+O jogo não abriu o `flashATRAC.pic` nos testes, nem na sessão de 29/10/2026 que passou pelos 10 capítulos. Todas as músicas (`sound/BGM/BGM/*.msf`) são MPEG estéreo; se o ATRAC for usado em algum lugar, roda interpretado e pode ter cortes.
+
+### 19. Áudio quebra na missão do capítulo 4 (STG08) — Corrigido (depende de mudança no SDK)
+- **Sintoma (29/10/2026):** na primeira missão do Chronicle 4章 ("近くて遠い", fase `stg08.gtc`), 60-75% dos blocos de áudio chegam vazios do começo ao fim da missão (`PORT_AUDIO_STATS`: ~680 underruns de 938 por linha), começando já em `MIS_ENTER.msf`. Em todas as outras fases testadas ficam abaixo de 0,4%.
+- **Não é a música:** `MIS_EVENT_BATTLE_BOSS.msf`, que toca nessa missão, também tocou na missão final sem cortes.
+- **Pista:** no log, cada execução da tarefa de áudio do SPU (`[spu_workload] WAIT_SIGNAL ... ran=`) leva 29-39 ms durante essa missão, contra 0-6 ms no resto da sessão.
+- **Causa:** `PORT_SPU_PROFILE` mostrou ~3,7 bilhões de passos interpretados em 0x37000-0x397C0. Ali a tarefa carrega, sem relocação e a partir de LS 0x36F80, um módulo SPU de 10 KB embutido no `EBOOT.ELF` (offset 0x686D00; não é codec do firmware). Essa fase roda o módulo em todo bloco de áudio.
+- **Correção, em duas partes:**
+  - `scripts/lift_audio_spu.py` traduz também esse módulo (72 funções, nenhuma instrução sem suporte), como já fazia com o `flashMP3.pic`; `spu_bridge.c` aceita várias sobreposições. Sozinho, isso baixou as falhas para 2-20%: o código traduzido do módulo virou ~46% do tempo da thread de áudio.
+  - No SDK (`runtime/spu/spu_helpers.h`), `rotqby`, `rotqbyi`, `shlqbyi` e `cwd` não tinham caminho vetorial em x86 (só em NEON) e viravam laços byte a byte. Com versões SSE4.1 (`pshufb`), idênticas à referência em teste exaustivo com gcc e clang, a função mais quente do módulo caiu de 11037 para 8244 instruções.
+- **Resultado (build PGO, 29/10/2026):** na mesma missão, 0,2% de underruns no combate da primeira fase e 0 em 3 minutos da segunda; a missão final continua limpa (8 de 26264). O chefe dessa missão não foi alcançado pelo piloto automático.
+- **Pendente:** a mudança no SDK está só na cópia local de `../ps3recomp`; o AppImage empacota a revisão fixada em `recompile.json`, então ela precisa entrar no SDK (e a revisão ser atualizada) para chegar aos jogadores.
+
+### 20. Aviso do motor de som com 176566 Hz — Em análise
+- O motor de som do jogo escreveu 4 vezes `SCREAM: Error! Sound buffer size is too small for this playback frequency (176566 Hz)` na missão final, logo depois de abrir a fala `VOICE/SKL/SKL_050.msf` (Skull). 176566 Hz é ~3,7× 48 kHz; não se sabe se é um tom alterado legítimo do jogo ou uma frequência calculada errado no port. Ainda não foi comparado com o jogo original.
 
 ### 13. Encerramento limpo — Em aberto
 Execuções com limite de tempo às vezes exigem SIGKILL (já anotado no `docs/BUILD.md`).
