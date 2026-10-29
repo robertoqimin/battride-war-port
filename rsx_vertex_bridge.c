@@ -336,12 +336,103 @@ int rsx_vertex_fetch_one(
     return 1;
 }
 
+/* Inline forms of rsx_vertex_decode_element for the formats STG02 combat
+ * decodes most (share of decoded attributes): FLOAT x3 27%, UNORM8 x4 26%,
+ * HALF x2 21%, UINT8 x4 13%, CMP32 9%, SNORM16 x4 4%. Through the call each
+ * was 11% of the frame clock thread. Same arithmetic, same results. */
+enum {
+    VTX_KIND_CALL, VTX_KIND_FLOAT3, VTX_KIND_FLOAT4, VTX_KIND_UNORM8X4,
+    VTX_KIND_UINT8X4, VTX_KIND_HALF, VTX_KIND_CMP32, VTX_KIND_SNORM16
+};
+
+static u32 rsx_vertex_decode_kind(u32 type, u32 size)
+{
+    switch (type) {
+    case RSX_VTX_TYPE_FLOAT:   return size <= 3 ? VTX_KIND_FLOAT3 : VTX_KIND_FLOAT4;
+    case RSX_VTX_TYPE_HALF:    return VTX_KIND_HALF;
+    case RSX_VTX_TYPE_CMP32:   return VTX_KIND_CMP32;
+    case RSX_VTX_TYPE_SNORM16: return VTX_KIND_SNORM16;
+#if defined(__SSE4_1__)
+    case RSX_VTX_TYPE_UNORM8:  return size == 4 ? VTX_KIND_UNORM8X4 : VTX_KIND_CALL;
+    case RSX_VTX_TYPE_UINT8:   return size == 4 ? VTX_KIND_UINT8X4 : VTX_KIND_CALL;
+#endif
+    default:                   return VTX_KIND_CALL;
+    }
+}
+
+/* Decodes one element of a kind other than VTX_KIND_CALL. size is 1..4 for
+ * the float kinds; rsx_vertex_decode_element's own loop stops at 4. */
+static inline __attribute__((always_inline)) void rsx_vertex_decode_inline(
+    u32 kind, u32 size, const u8* source, float value[4])
+{
+    switch (kind) {
+    case VTX_KIND_FLOAT3:
+        value[0] = rsx_compact_be_f32(source);
+        value[1] = size > 1 ? rsx_compact_be_f32(source + 4) : 0.0f;
+        value[2] = size > 2 ? rsx_compact_be_f32(source + 8) : 0.0f;
+        value[3] = 1.0f;
+        return;
+#if defined(__SSE4_1__)
+    case VTX_KIND_FLOAT4: {
+        const __m128i bytes = _mm_loadu_si128((const __m128i*)source);
+        const __m128i words = _mm_shuffle_epi8(bytes,
+            _mm_setr_epi8(3,2,1,0, 7,6,5,4, 11,10,9,8, 15,14,13,12));
+        _mm_storeu_ps(value, _mm_castsi128_ps(words));
+        return;
+    }
+    case VTX_KIND_UNORM8X4:
+    case VTX_KIND_UINT8X4: {
+        u32 packed; memcpy(&packed, source, sizeof packed);
+        __m128 v = _mm_cvtepi32_ps(_mm_cvtepu8_epi32(_mm_cvtsi32_si128((int)packed)));
+        if (kind == VTX_KIND_UNORM8X4) v = _mm_div_ps(v, _mm_set1_ps(255.0f));
+        _mm_storeu_ps(value, v);
+        return;
+    }
+#else
+    case VTX_KIND_FLOAT4:
+        for (u32 c = 0; c < 4; c++) value[c] = rsx_compact_be_f32(source + c * 4);
+        return;
+#endif
+    case VTX_KIND_HALF:
+        value[0] = rsx_compact_be_f16(source);
+        value[1] = size > 1 ? rsx_compact_be_f16(source + 2) : 0.0f;
+        value[2] = size > 2 ? rsx_compact_be_f16(source + 4) : 0.0f;
+        value[3] = size > 3 ? rsx_compact_be_f16(source + 6) : 1.0f;
+        return;
+    case VTX_KIND_SNORM16:
+        for (u32 c = 0; c < 4; c++) {
+            if (c < size) {
+                const s16 v = (s16)((source[c * 2] << 8) | source[c * 2 + 1]);
+                value[c] = v / 32767.0f;
+            } else {
+                value[c] = c == 3 ? 1.0f : 0.0f;
+            }
+        }
+        return;
+    case VTX_KIND_CMP32: {
+        const u32 word = ((u32)source[0] << 24) | ((u32)source[1] << 16) |
+                         ((u32)source[2] << 8) | (u32)source[3];
+        s32 x = (s32)(word & 0x7FF);
+        s32 y = (s32)((word >> 11) & 0x7FF);
+        s32 z = (s32)((word >> 22) & 0x3FF);
+        if (x & 0x400) x -= 0x800;
+        if (y & 0x400) y -= 0x800;
+        if (z & 0x200) z -= 0x400;
+        value[0] = (float)x / 1023.0f;
+        value[1] = (float)y / 1023.0f;
+        value[2] = (float)z / 511.0f;
+        value[3] = 1.0f;
+        return;
+    }
+    }
+}
+
 /* rsx_vertex_fetch_one for n references, attribute by attribute: the format
- * is looked at once per attribute instead of once per vertex, and float
- * attributes of one to three components are converted inline. Elements
- * outside the stable range take rsx_vertex_fetch_one's own path. Output is
- * byte for byte what n calls of rsx_vertex_fetch_one write
- * (PORT_VERTEX_VERIFY=1 in rsx_engine_bridge.c checks it). */
+ * is looked at once per attribute instead of once per vertex, and the common
+ * formats are converted inline (rsx_vertex_decode_inline). Elements outside
+ * the stable range take rsx_vertex_fetch_one's own path. Output is byte for
+ * byte what n calls of rsx_vertex_fetch_one write (PORT_VERTEX_VERIFY=1 in
+ * rsx_engine_bridge.c checks it). */
 int rsx_vertex_fetch_many(
     const rsx_vertex_fetch_plan* plan, const rsx_vertex_ref* refs, u32 n, u8* out)
 {
@@ -360,7 +451,7 @@ int rsx_vertex_fetch_many(
         }
         const u32 type = fetch->desc.type, size = fetch->desc.size;
         const u32 divider = (plan->divider_mask >> attr) & 1u;
-        const int inline_float = type == RSX_VTX_TYPE_FLOAT && size <= 3;
+        const u32 kind = rsx_vertex_decode_kind(type, size);
         for (u32 i = 0; i < n; i++) {
             float* value = (float*)(dst + (u64)i * stride);
             const u32 element = rsx_vertex_element_index(
@@ -369,11 +460,8 @@ int rsx_vertex_fetch_many(
                 element >= fetch->stable_first && element <= fetch->stable_last) {
                 const u8* source = fetch->stable_base +
                     (u64)(element - fetch->stable_first) * fetch->stride;
-                if (inline_float) {
-                    value[0] = rsx_compact_be_f32(source);
-                    value[1] = size > 1 ? rsx_compact_be_f32(source + 4) : 0.0f;
-                    value[2] = size > 2 ? rsx_compact_be_f32(source + 8) : 0.0f;
-                    value[3] = 1.0f;
+                if (kind != VTX_KIND_CALL) {
+                    rsx_vertex_decode_inline(kind, size, source, value);
                     continue;
                 }
                 if (rsx_vertex_decode_element(type, size, source, value))

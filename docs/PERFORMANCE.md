@@ -98,6 +98,12 @@ chunks keep the existing preset optimization. No fast-math is enabled.
 `rsx_vertex_bridge.c` has exact four-component SSE4.1 paths for float, UNORM8,
 and UINT8 attributes; other formats and component counts retain SDK behavior.
 `bash tests/test_vertex_decode.sh` compares 5.4 million decodes with the SDK.
+`rsx_vertex_fetch_many` picks each attribute's format once and decodes the
+common ones (float, half, UNORM8/UINT8 x4, CMP32, SNORM16) inline instead of
+calling `rsx_vertex_decode_element` per vertex; the same test checks the batch
+path against single decodes. In real fighting it is neutral (59.0 against
+59.2 fps, worst five seconds 54.9 against 54.7, p95 19.4 against 19.8 ms): it
+speeds the frame clock thread, and `runTaskMain` sets the frame rate.
 
 ## Guarded PPU memory paths
 
