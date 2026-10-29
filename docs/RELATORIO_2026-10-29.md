@@ -1,0 +1,88 @@
+# Relatório de 29/10/2026: jogo do início ao fim, áudio do capítulo 4 e versão 0.5.2
+
+## Resumo
+
+- **Do início ao fim:** com um save do RPCS3 com a história completa, a primeira missão de todos os 10 capítulos do Chronicle carrega e roda, sem travamentos. Ainda não foi validado concluir as missões, as outras ~20 missões, o final e os créditos, Rider Road, Free Mission e Galeria: o piloto automático usado no teste não conclui missões.
+- **Áudio do capítulo 4:** na missão "近くて遠い" (fase `stg08`), cerca de 72% dos blocos de áudio chegavam atrasados. Agora são 0,2% a 0,7% no combate e 0% na segunda fase, o mesmo nível das outras fases.
+- **Versão 0.5.2:** o AppImage foi gerado com a correção e testado de ponta a ponta numa pasta de dados nova: importação do ISO, tradução, compilação no computador e a missão do capítulo 4.
+
+## 1. Teste do início ao fim
+
+Ambiente: Ryzen 5 4600H e GTX 1650, build PGO local, janela aberta, entrada por roteiro (`PAD_FILE` e `PORT_PAD_STICK_FILE`). O save usado foi uma cópia do save do RPCS3 (`BLJS102200000`), sem criptografia; o original não foi alterado.
+
+| Capítulo | Fase | Resultado |
+|---|---|---|
+| Prólogo | STG02 | roda |
+| 英雄の目覚め (1) | STG02 | roda |
+| 英雄の目覚め (2) | STG09 | roda |
+| 英雄の目覚め (3) | STG03 | missão de moto com tempo; "Mission Failed" tratado normalmente |
+| Chronicle 1章 | STG05 | roda |
+| Chronicle 2章 | STG11 | roda |
+| Chronicle 3章 | STG10 | roda |
+| Chronicle 4章 | STG08 | rodava com o áudio quebrado; corrigido (seção 2) |
+| Chronicle 5章 | STG12 | roda |
+| 最終章 | STG19 | 8 minutos a 59,4 fps |
+
+Foram cerca de 70 minutos e ~25 carregamentos de fase, com média de 55 fps e nenhum erro do port no log. Detalhes em [ISSUES.md](ISSUES.md), item 8.
+
+## 2. Áudio do capítulo 4
+
+### Causa
+
+- `PORT_SPU_PROFILE` mostrou ~3,7 bilhões de passos interpretados da tarefa de áudio do SPU no trecho de LS `0x37000`-`0x397C0`.
+- Esse código é um módulo SPU de 10 KB embutido no `EBOOT.ELF` (offset `0x686D00`). Não é codec do firmware.
+- A tarefa carrega o módulo sem relocação em LS `0x36F80`, e essa fase o executa em todo bloco de áudio. Ele rodava inteiramente interpretado.
+
+### Correção
+
+1. **Port** (`58c073b`):
+   - `scripts/lift_audio_spu.py` traduz o módulo como já fazia com o `flashMP3.pic`: 72 funções, nenhuma instrução sem suporte.
+   - `spu_bridge.c` passou a aceitar várias sobreposições, cada uma executada só enquanto o LS contém as instruções de onde foi traduzida.
+   - Sozinha, essa parte baixou as falhas para 2% a 20%. Com o perfilador de CPU (`PORT_PROFILE`), o código traduzido do módulo passou a ser ~46% do tempo da thread de áudio.
+2. **SDK** (`ea42a29`):
+   - No x86, `rotqby`, `rotqbyi`, `shlqbyi` e `cwd` em `runtime/spu/spu_helpers.h` viravam laços byte a byte, porque só havia caminho vetorial para NEON.
+   - As versões SSE4.1 (`pshufb`) dão resultado idêntico às de referência num teste exaustivo com gcc e clang.
+   - A função mais quente do módulo caiu de 11.037 para 8.244 instruções.
+   - A mudança vai como patch do port, em `patches/ps3recomp/0001-spu-helpers-sse41-byte-rotates.patch`:
+     - `scripts/build_appimage.py` aplica o patch ao SDK fixado (`a6d76c8`);
+     - `docs/BUILD.md` explica como aplicá-lo num checkout local;
+     - o CMake se recusa a compilar com um SDK sem o patch.
+
+### Resultado
+
+Falhas de áudio (`PORT_AUDIO_STATS`, blocos atrasados em relação ao total):
+
+| Build | Capítulo 4, combate da 1ª fase | Capítulo 4, 2ª fase | Missão final |
+|---|---|---|---|
+| Antes | ~72% | n/m | <0,4% |
+| Só o módulo traduzido | 2-20% | n/m | n/m |
+| Local, módulo + patch do SDK | 0,2% (32/15.008) | 0% (3 min) | 0,03% (8/26.264) |
+| AppImage 0.5.2, compilado no computador | 0,7% (160/23.450) | 0% (2,5 min, 60 fps) | n/m |
+
+n/m = não medido.
+
+No AppImage, as perdas da primeira fase aparecem em picos de até 3,8% num intervalo de 5 segundos, a maioria logo depois de entrar na missão. A luta com o chefe do capítulo 4 não foi alcançada pelo piloto automático.
+
+## 3. AppImage 0.5.2
+
+- **Versão:** `scripts/build_appimage.py`, README e `docs/APPIMAGE.md`, com uma nota "Chapter 4 audio in 0.5.2".
+- **Build:**
+  - feito no contêiner `battride-build:ubuntu22.04`, com os perfis PGO de `build-pgo11/pgo`;
+  - o runtime type2 e o 7-Zip vieram do build da 0.5.1 e conferem com os SHA-256 registrados no `package.json` dela;
+  - resultado: `dist/v0.5.2/BattrideWarRecomp-v0.5.2-x86_64.AppImage`, 236 MB, SHA-256 `8dd96ccd3698ec7934d8546184c3440544f787901d8bc80c78120a9ca48a10f3`.
+- **Conteúdo:** o SDK empacotado contém o patch, e `patches/ps3recomp/` está nas fontes públicas.
+- **`--check`:** passou.
+- **Importação com `--import-only`** numa pasta nova (`~/battride-test-0.5.2`), limitada a 3 núcleos e 8 GB:
+  - download do RPCS3, importação e tradução: ok;
+  - o build informou `module: 72 entries translated` e `audio SPU module: translated`;
+  - compilação em 19 minutos com 3 jobs e perfis PGO;
+  - `build.json` registra o pacote 0.5.2.
+- **Jogo:** o runner compilado pelo AppImage carregou o save completo, entrou na missão do capítulo 4 e registrou "translated task and overlays". Resultados na tabela da seção 2.
+
+## 4. Pendências
+
+- **Validação completa:** concluir as missões e testar o final e os créditos, Rider Road, Free Mission e Galeria exige jogar manualmente.
+- **Aviso SCREAM com 176566 Hz** ([ISSUES.md](ISSUES.md) item 20): apareceu na missão final do teste do início ao fim e não apareceu na sessão do AppImage. Ainda não foi comparado com o jogo original.
+- **Publicação:** o release 0.5.2 não foi publicado no GitHub. O README já aponta para a v0.5.2 como último release. Para publicar, falta gerar o tar de fontes com `scripts/collect_sources.py`, que precisa de rede e do commit do runtime type2.
+- **`docs/PERFORMANCE.md`:** o AppImage foi gerado com a sua alteração ainda sem commit nesse arquivo (seção "The list lookup is latency-bound"). Ele está em `PUBLIC_FILES.txt`, então o texto foi empacotado. Só muda documentação, não código.
+- **Patch do SDK:** se o `ps3recomp` incorporar essas versões e a revisão fixada for atualizada, o patch deve ser removido.
