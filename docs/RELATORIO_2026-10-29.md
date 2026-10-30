@@ -83,6 +83,6 @@ No AppImage, as perdas da primeira fase aparecem em picos de até 3,8% num inter
 
 - **Validação completa:** concluir as missões e testar o final e os créditos, Rider Road, Free Mission e Galeria exige jogar manualmente.
 - **Aviso SCREAM com 176566 Hz** ([ISSUES.md](ISSUES.md) item 20): apareceu na missão final do teste do início ao fim e não apareceu na sessão do AppImage. Ainda não foi comparado com o jogo original.
-- **Publicação:** o release 0.5.2 não foi publicado no GitHub. O README já aponta para a v0.5.2 como último release. Para publicar, falta gerar o tar de fontes com `scripts/collect_sources.py`, que precisa de rede e do commit do runtime type2.
+- **Publicação:** feita em 29/10/2026: release [v0.5.2](https://github.com/robertoqimin/battride-war-recomp/releases/tag/v0.5.2) (tag em `c9a165c`), com o AppImage, o tar de fontes (192 pacotes, mesma lista de arquivos da 0.5.1; SHA-256 `f5d15b4c…9bc8`) e os `.sha256`. O kernel `linux 5.15.0-198.208` (headers do sysroot) já não está no arquivo do Ubuntu; `scripts/collect_sources.py` agora aceita a cópia do cache das releases anteriores, conferida pelo SHA-256 do `.dsc`.
 - **`docs/PERFORMANCE.md`:** o AppImage foi gerado com a sua alteração ainda sem commit nesse arquivo (seção "The list lookup is latency-bound"). Ele está em `PUBLIC_FILES.txt`, então o texto foi empacotado. Só muda documentação, não código.
 - **Patch do SDK:** se o `ps3recomp` incorporar essas versões e a revisão fixada for atualizada, o patch deve ser removido.
