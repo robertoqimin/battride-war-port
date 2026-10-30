@@ -46,6 +46,7 @@ __pycache__/
 .env.*
 !.env.example
 /CMakeUserPresets.json
+/.cache/
 /core
 /core.*
 
