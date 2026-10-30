@@ -35,6 +35,41 @@ def fetch(url, dest, sha256=None):
     dest.write_bytes(data)
 
 
+def reused_complete(ubuntu, src, version):
+    """True when a reused download already holds src=version whole.
+
+    The archive keeps only the newest version of a package (linux-libc-dev
+    5.15.0-198.208 was superseded after 0.5.1), so apt-get source fails for
+    the one in the image. A copy downloaded for an earlier release is the
+    same source: accept it when its .dsc names that version and every file
+    the .dsc lists is present with the SHA-256 it records."""
+    dsc = ubuntu / f'{src}_{version.split(":", 1)[-1]}.dsc'
+    if not dsc.is_file():
+        return False
+    text = dsc.read_text(errors='replace')
+    if not any(l.startswith('Version:') and l.split(':', 1)[1].strip() == version for l in text.splitlines()):
+        return False
+    if '\nChecksums-Sha256:\n' not in text:
+        return False
+    entries = []
+    for line in text.split('\nChecksums-Sha256:\n', 1)[1].splitlines():
+        if not line.startswith(' '):
+            break                       # the next field (Files:, with MD5 sums)
+        entries.append(line.split())
+    for sha, _size, name in entries:
+        path = ubuntu / name
+        if not path.is_file():
+            return False
+        h = hashlib.sha256()
+        with path.open('rb') as f:
+            for chunk in iter(lambda: f.read(1 << 20), b''):
+                h.update(chunk)
+        if h.hexdigest() != sha:
+            return False
+    print(f'{src}={version}: no longer in the archive; using the verified copy from --reuse', flush=True)
+    return bool(entries)
+
+
 def owners():
     """Map every packaged path, also under its merged-/usr real location, to its binary package."""
     table = {}
@@ -93,7 +128,7 @@ def main():
     failed = []
     for (src, version) in sorted(sources):
         result = subprocess.run(['apt-get', 'source', '--download-only', '-qq', f'{src}={version}'], cwd=ubuntu)
-        if result.returncode:
+        if result.returncode and not reused_complete(ubuntu, src, version):
             failed.append(f'{src}={version}')
     if failed:
         raise SystemExit('Source packages not available: ' + ', '.join(failed))
